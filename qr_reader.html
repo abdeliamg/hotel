@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>قارئ الكود</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #121212;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+    h1 {
+      margin-top: 20px;
+      font-size: 1.5em;
+    }
+    #reader {
+      width: 100%;
+      max-width: 400px;
+      aspect-ratio: 1/1;
+      margin-top: 20px;
+    }
+    .footer {
+      margin-top: 20px;
+      font-size: 0.9em;
+      color: #aaa;
+    }
+  </style>
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+</head>
+<body>
+
+  <h1>قارئ باركود الحجاج</h1>
+  <div id="reader"></div>
+  <div class="footer">تم البرمجة بواسطة عبد المنعم</div>
+
+  <script>
+    function isValidUrl(string) {
+      try {
+        new URL(string);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+  
+    const html5QrCode = new Html5Qrcode("reader");
+    let cameraId;
+  
+    function startCamera() {
+      html5QrCode.start(
+        cameraId,
+        {
+          fps: 10,
+          qrbox: { width: 250, height: 250 }
+        },
+        qrCodeMessage => {
+          if (isValidUrl(qrCodeMessage)) {
+            window.open(qrCodeMessage, '_blank');
+  
+            // Stop scanning to avoid repeats
+            html5QrCode.stop().then(() => {
+              // Restart after 2 seconds
+              setTimeout(() => {
+                startCamera();
+              }, 2000);
+            });
+          } else {
+            alert("❌ Invalid URL: " + qrCodeMessage);
+          }
+        },
+        errorMessage => {
+          // Optional: console.log("QR error:", errorMessage);
+        }
+      ).catch(err => {
+        alert("❌ Failed to start camera: " + err);
+      });
+    }
+  
+    Html5Qrcode.getCameras().then(devices => {
+      if (devices && devices.length) {
+        cameraId = devices[0].id;
+        startCamera();
+      } else {
+        alert("❌ No camera found.");
+      }
+    }).catch(err => {
+      alert("❌ Camera access denied.");
+    });
+  </script>
+  
+
+</body>
+</html>

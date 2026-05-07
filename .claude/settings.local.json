@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import sqlite3; conn = sqlite3.connect\\('hajj_data.db'\\); print\\(conn.execute\\('SELECT sql FROM sqlite_master WHERE type=\\\\\"table\\\\\"'\\).fetchall\\(\\)\\)\")",
+      "Bash(sqlite3 /c/Users/abdal/Desktop/hotel/hajj_data.db \".schema\")",
+      "Bash(sqlite3 /c/Users/abdal/Desktop/hotel/hajj_data.db \".tables\")",
+      "Bash(python3)",
+      "Bash(php -r ' *)"
+    ]
+  }
+}
