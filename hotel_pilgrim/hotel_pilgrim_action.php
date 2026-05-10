@@ -4,18 +4,49 @@ ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 require_once __DIR__ . '/../includes/paste_import.php';
+require_once __DIR__ . '/../includes/auth.php';
 
-session_start();
-if (!isset($_COOKIE['master_group'])) {
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+$master_group = trim((string)($_COOKIE['master_group'] ?? ''));
+$current_user = get_authenticated_user();
+
+if ($master_group === '' && !$current_user) {
     echo json_encode(['success' => false, 'message' => 'User not logged in.']);
     exit();
 }
 
-$pdo = new PDO('sqlite:../hajj_data.db');
-$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+function hotel_pilgrim_is_departed(PDO $pdo, string $barcode): bool
+{
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM pilgrim_flight WHERE barcode = :barcode");
+    $stmt->execute([':barcode' => $barcode]);
+    return (int)$stmt->fetchColumn() > 0;
+}
 
-// Get master_group from cookie
-$master_group = $_COOKIE['master_group'];
+function hotel_pilgrim_resolve_group(PDO $pdo, string $hotelName, string $floor, string $roomNum, string $masterGroup): ?string
+{
+    if ($masterGroup !== '') {
+        $stmt = $pdo->prepare("SELECT group_name FROM res WHERE hotel_name = :hotel_name AND floor = :floor AND room_num = :room_num AND group_name = :group_name LIMIT 1");
+        $stmt->execute([
+            ':hotel_name' => $hotelName,
+            ':floor' => $floor,
+            ':room_num' => $roomNum,
+            ':group_name' => $masterGroup,
+        ]);
+    } else {
+        $stmt = $pdo->prepare("SELECT group_name FROM res WHERE hotel_name = :hotel_name AND floor = :floor AND room_num = :room_num ORDER BY date(end_date) DESC, id DESC LIMIT 1");
+        $stmt->execute([
+            ':hotel_name' => $hotelName,
+            ':floor' => $floor,
+            ':room_num' => $roomNum,
+        ]);
+    }
+
+    $groupName = $stmt->fetchColumn();
+    return $groupName === false ? null : (string)$groupName;
+}
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'import_validate') {
     $parsed = parse_pasted_tsv(
@@ -38,7 +69,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'import_validate
     $errors = [];
     $rows = [];
     $stmtPilgrim = $pdo->prepare("SELECT COUNT(*) FROM pilgrim WHERE barcode = :barcode");
-    $stmtRoom = $pdo->prepare("SELECT COUNT(*) FROM res WHERE hotel_name = :hotel_name AND floor = :floor AND room_num = :room_num AND group_name = :group_name");
+    $stmtDeparted = $pdo->prepare("SELECT COUNT(*) FROM pilgrim_flight WHERE barcode = :barcode");
     foreach ($parsed['rows'] as $idx => $row) {
         $item = [
             'hotel_name' => trim((string)($row['hotel_name'] ?? '')),
@@ -60,15 +91,18 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'import_validate
             continue;
         }
 
-        $stmtRoom->execute([
-            ':hotel_name' => $item['hotel_name'],
-            ':floor' => $item['floor'],
-            ':room_num' => $item['room_num'],
-            ':group_name' => $master_group
-        ]);
-        if ((int)$stmtRoom->fetchColumn() === 0) {
-            $errors[] = ['row' => $idx + 1, 'message' => 'الغرفة غير متاحة لهذه المجموعة.'];
+        $stmtDeparted->execute([':barcode' => $item['barcode']]);
+        if ((int)$stmtDeparted->fetchColumn() > 0) {
+            $errors[] = ['row' => $idx + 1, 'message' => 'لا يمكن إضافة حاج تم ترحيله.'];
+            continue;
         }
+
+        $resolvedGroup = hotel_pilgrim_resolve_group($pdo, $item['hotel_name'], $item['floor'], $item['room_num'], $master_group);
+        if ($resolvedGroup === null) {
+            $errors[] = ['row' => $idx + 1, 'message' => 'الغرفة غير متاحة لهذه المجموعة.'];
+            continue;
+        }
+        $rows[$idx]['group_name'] = $resolvedGroup;
     }
 
     echo json_encode(['success' => true, 'rows' => $rows, 'errors' => $errors]);
@@ -88,12 +122,23 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'import_batch') 
         $stmt = $pdo->prepare("INSERT INTO hotel_pilgrim (hotel_name, floor, room_num, barcode, group_name, note)
                                VALUES (:hotel_name, :floor, :room_num, :barcode, :group_name, :note)");
         foreach ($rows as $row) {
+            $hotelName = trim((string)($row['hotel_name'] ?? ''));
+            $floor = trim((string)($row['floor'] ?? ''));
+            $roomNum = trim((string)($row['room_num'] ?? ''));
+            $barcode = trim((string)($row['barcode'] ?? ''));
+            if (hotel_pilgrim_is_departed($pdo, $barcode)) {
+                throw new RuntimeException('لا يمكن إضافة حاج تم ترحيله: ' . $barcode);
+            }
+            $groupName = hotel_pilgrim_resolve_group($pdo, $hotelName, $floor, $roomNum, $master_group);
+            if ($groupName === null) {
+                throw new RuntimeException('الغرفة غير متاحة: ' . $hotelName . ' / ' . $floor . ' / ' . $roomNum);
+            }
             $stmt->execute([
-                ':hotel_name' => trim((string)($row['hotel_name'] ?? '')),
-                ':floor' => trim((string)($row['floor'] ?? '')),
-                ':room_num' => trim((string)($row['room_num'] ?? '')),
-                ':barcode' => trim((string)($row['barcode'] ?? '')),
-                ':group_name' => $master_group,
+                ':hotel_name' => $hotelName,
+                ':floor' => $floor,
+                ':room_num' => $roomNum,
+                ':barcode' => $barcode,
+                ':group_name' => $groupName,
                 ':note' => (string)($row['note'] ?? ''),
             ]);
             $inserted++;
@@ -117,6 +162,17 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'create') {
     $barcode = $_POST['barcode'];
     $note = $_POST['note'];
 
+    if (hotel_pilgrim_is_departed($pdo, (string)$barcode)) {
+        echo json_encode(['success' => false, 'message' => 'لا يمكن إضافة حاج تم ترحيله.']);
+        exit();
+    }
+
+    $group_name = hotel_pilgrim_resolve_group($pdo, (string)$hotel_name, (string)$floor, (string)$room_num, $master_group);
+    if ($group_name === null) {
+        echo json_encode(['success' => false, 'message' => 'الغرفة غير متاحة أو لا توجد حجز مطابق.']);
+        exit();
+    }
+
     // Insert new row into hotel_pilgrim
     try {
         $stmt = $pdo->prepare("INSERT INTO hotel_pilgrim (hotel_name, floor, room_num, barcode, group_name, note)
@@ -125,7 +181,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'create') {
         $stmt->bindParam(':floor', $floor);
         $stmt->bindParam(':room_num', $room_num);
         $stmt->bindParam(':barcode', $barcode);
-        $stmt->bindParam(':group_name', $master_group);
+        $stmt->bindParam(':group_name', $group_name);
         $stmt->bindParam(':note', $note);
         $stmt->execute();
 
@@ -144,17 +200,32 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'edit') {
     $barcode = $_POST['barcode'];
     $note = $_POST['note'];
 
+    if (hotel_pilgrim_is_departed($pdo, (string)$barcode)) {
+        echo json_encode(['success' => false, 'message' => 'لا يمكن اختيار حاج تم ترحيله.']);
+        exit();
+    }
+
+    $group_name = hotel_pilgrim_resolve_group($pdo, (string)$hotel_name, (string)$floor, (string)$room_num, $master_group);
+    if ($group_name === null) {
+        echo json_encode(['success' => false, 'message' => 'الغرفة غير متاحة أو لا توجد حجز مطابق.']);
+        exit();
+    }
+
     // Update the row
     try {
-        $stmt = $pdo->prepare("UPDATE hotel_pilgrim SET hotel_name = :hotel_name, floor = :floor, room_num = :room_num, barcode = :barcode, note = :note
-                               WHERE id = :id AND group_name = :group_name");
+        $where = $master_group !== '' ? "WHERE id = :id AND group_name = :current_group_name" : "WHERE id = :id";
+        $stmt = $pdo->prepare("UPDATE hotel_pilgrim SET hotel_name = :hotel_name, floor = :floor, room_num = :room_num, barcode = :barcode, group_name = :group_name, note = :note
+                               {$where}");
         $stmt->bindParam(':hotel_name', $hotel_name);
         $stmt->bindParam(':floor', $floor);
         $stmt->bindParam(':room_num', $room_num);
         $stmt->bindParam(':barcode', $barcode);
+        $stmt->bindParam(':group_name', $group_name);
         $stmt->bindParam(':note', $note);
         $stmt->bindParam(':id', $id);
-        $stmt->bindParam(':group_name', $master_group);
+        if ($master_group !== '') {
+            $stmt->bindParam(':current_group_name', $master_group);
+        }
         $stmt->execute();
 
         echo json_encode(['success' => true]);
@@ -169,9 +240,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'delete') {
 
     // Delete the row
     try {
-        $stmt = $pdo->prepare("DELETE FROM hotel_pilgrim WHERE id = :id AND group_name = :group_name");
+        $where = $master_group !== '' ? "WHERE id = :id AND group_name = :group_name" : "WHERE id = :id";
+        $stmt = $pdo->prepare("DELETE FROM hotel_pilgrim {$where}");
         $stmt->bindParam(':id', $id);
-        $stmt->bindParam(':group_name', $master_group);
+        if ($master_group !== '') {
+            $stmt->bindParam(':group_name', $master_group);
+        }
         $stmt->execute();
 
         echo json_encode(['success' => true]);

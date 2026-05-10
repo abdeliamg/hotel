@@ -842,9 +842,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
                                 <label for="roomNum" class="form-label">
                                     <i class="bi bi-door-closed"></i> رقم الغرفة
                                 </label>
-                                <select class="form-control" id="roomNum" multiple="multiple" required>
-                                    <option value="">اختر رقم الغرفة</option>
-                                </select>
+                                <select class="form-control" id="roomNum" multiple="multiple" required></select>
                             </div>
                             <div class="col-md-6 mb-3">
                                 <label for="groupName" class="form-label">
@@ -1083,9 +1081,68 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
                 table.ajax.reload(null, false);
             }
 
+            function destroySelect2($select) {
+                if ($select.hasClass('select2-hidden-accessible')) {
+                    $select.select2('destroy');
+                }
+            }
+
+            function initFloorSelect(hotelName) {
+                const $floor = $('#floor');
+                destroySelect2($floor);
+                $floor.val(null).empty().append('<option value="">اختر الطابق</option>');
+
+                const config = {
+                    placeholder: 'اختر الطابق',
+                    width: '100%',
+                    dir: 'rtl',
+                    dropdownParent: $('#addReservationModal')
+                };
+
+                if (hotelName) {
+                    config.ajax = {
+                        url: 'res_floors.php',
+                        dataType: 'json',
+                        delay: 250,
+                        data: () => ({ hotel: hotelName }),
+                        processResults: data => ({ results: data.results })
+                    };
+                }
+
+                $floor.select2(config);
+            }
+
+            function initRoomSelect(hotelName, floor) {
+                const $room = $('#roomNum');
+                destroySelect2($room);
+                $room.val(null).empty();
+
+                const config = {
+                    placeholder: 'اختر رقم الغرفة',
+                    width: '100%',
+                    dir: 'rtl',
+                    closeOnSelect: false,
+                    dropdownParent: $('#addReservationModal')
+                };
+
+                if (hotelName && floor) {
+                    config.ajax = {
+                        url: 'res_rooms.php',
+                        dataType: 'json',
+                        delay: 250,
+                        data: () => ({ hotel: hotelName, floor }),
+                        processResults: data => ({ results: data.results })
+                    };
+                }
+
+                $room.select2(config);
+            }
+
             // Select2 initializations
             $('#hotelName').select2({
                 placeholder: 'اختر فندق',
+                width: '100%',
+                dir: 'rtl',
                 ajax: {
                     url: 'res_hotels.php',
                     dataType: 'json',
@@ -1099,18 +1156,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
                 dropdownParent: $('#addReservationModal')
             });
 
-            $('#floor').select2({
-                placeholder: 'اختر الطابق',
-                dropdownParent: $('#addReservationModal')
-            });
-
-            $('#roomNum').select2({
-                placeholder: 'اختر رقم الغرفة',
-                dropdownParent: $('#addReservationModal')
-            });
+            initFloorSelect();
+            initRoomSelect();
 
             $('#groupName').select2({
                 placeholder: 'اختر المجموعة',
+                width: '100%',
+                dir: 'rtl',
                 ajax: {
                     url: 'res_groups.php',
                     dataType: 'json',
@@ -1128,42 +1180,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
             // Dependent selects
             $('#hotelName').on('change', function () {
                 const hotelName = $(this).val();
-                $('#floor').val(null).trigger('change');
-                $('#roomNum').val(null).trigger('change');
-
-                if (hotelName) {
-                    $('#floor').select2({
-                        placeholder: 'اختر الطابق',
-                        ajax: {
-                            url: 'res_floors.php',
-                            dataType: 'json',
-                            delay: 250,
-                            data: () => ({ hotel: hotelName }),
-                            processResults: data => ({ results: data.results })
-                        },
-                        dropdownParent: $('#addReservationModal')
-                    });
-                }
+                initFloorSelect(hotelName);
+                initRoomSelect();
             });
 
             $('#floor').on('change', function () {
                 const hotelName = $('#hotelName').val();
                 const floor = $(this).val();
-                $('#roomNum').val(null).trigger('change');
-
-                if (hotelName && floor) {
-                    $('#roomNum').select2({
-                        placeholder: 'اختر رقم الغرفة',
-                        ajax: {
-                            url: 'res_rooms.php',
-                            dataType: 'json',
-                            delay: 250,
-                            data: () => ({ hotel: hotelName, floor }),
-                            processResults: data => ({ results: data.results })
-                        },
-                        dropdownParent: $('#addReservationModal')
-                    });
-                }
+                initRoomSelect(hotelName, floor);
             });
 
             // ------------------------------------
@@ -1400,7 +1424,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
             // Reset single-add form on close
             $('#addReservationModal').on('hidden.bs.modal', function () {
                 $('#addReservationForm')[0].reset();
-                $('#hotelName,#floor,#roomNum,#groupName').val(null).trigger('change');
+                $('#hotelName').val(null).trigger('change');
+                $('#groupName').val(null).trigger('change');
             });
 
             // Clear bulk textarea on open/close

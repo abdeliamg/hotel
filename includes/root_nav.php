@@ -7,6 +7,7 @@ if (!function_exists('render_root_navbar')) {
             'hotels' => ['label' => 'الفنادق', 'href' => '/hotel.php'],
             'rooms' => ['label' => 'الغرف', 'href' => '/room.php'],
             'reservations' => ['label' => 'الحجوزات', 'href' => '/res.php'],
+            'departures' => ['label' => 'ترحيل الحجاج', 'href' => '/pilgrim_flight.php'],
             'reports' => ['label' => 'التقارير', 'href' => '/hotel_room.php'],
             'phones' => ['label' => 'أرقام المجموعات', 'href' => '/update_group_phone.php'],
         ];

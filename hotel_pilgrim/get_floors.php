@@ -1,20 +1,36 @@
 <?php
-session_start();
-if (!isset($_COOKIE['master_group'])) {
+require_once __DIR__ . '/../includes/auth.php';
+
+$master_group = trim((string)($_COOKIE['master_group'] ?? ''));
+$user = get_authenticated_user();
+
+if ($master_group === '' && !$user) {
+    http_response_code(403);
     exit();
 }
 
-$pdo = new PDO('sqlite:../hajj_data.db');
-$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+// Get hotel_name and optional group_name from GET request.
+$hotel_name = trim((string)($_GET['hotel_name'] ?? ''));
+$group_name = trim((string)($_GET['group_name'] ?? ''));
 
-// Get hotel_name and group_name from GET request
-$hotel_name = $_GET['hotel_name'];
-$group_name = $_GET['group_name'] || '';
+if ($hotel_name === '') {
+    header('Content-Type: application/json');
+    echo json_encode(['results' => []]);
+    exit();
+}
 
-$stmt = $pdo->prepare("SELECT DISTINCT floor FROM res WHERE hotel_name = :hotel_name AND group_name like :group_name");
-//$stmt = $pdo->prepare("SELECT DISTINCT floor FROM res WHERE hotel_name = :hotel_name");
-$stmt->bindParam(':hotel_name', $hotel_name);
-$stmt->bindParam(':group_name', $group_name);
+if ($group_name === '' && $master_group !== '') {
+    $group_name = $master_group;
+}
+
+if ($group_name !== '') {
+    $stmt = $pdo->prepare("SELECT DISTINCT floor FROM res WHERE hotel_name = :hotel_name AND group_name = :group_name ORDER BY floor");
+    $stmt->bindValue(':hotel_name', $hotel_name);
+    $stmt->bindValue(':group_name', $group_name);
+} else {
+    $stmt = $pdo->prepare("SELECT DISTINCT floor FROM res WHERE hotel_name = :hotel_name ORDER BY floor");
+    $stmt->bindValue(':hotel_name', $hotel_name);
+}
 $stmt->execute();
 
 $floors = $stmt->fetchAll(PDO::FETCH_COLUMN);

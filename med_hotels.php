@@ -199,6 +199,7 @@ require_once __DIR__ . '/includes/root_nav.php';
         .icon-primary { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); }
         .icon-success { background: linear-gradient(135deg, #10b981 0%, #059669 100%); }
         .icon-warning { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); }
+        .icon-info { background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%); }
 
         .feature-title {
             font-size: 24px;
@@ -260,6 +261,7 @@ require_once __DIR__ . '/includes/root_nav.php';
         .btn-primary-custom { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); }
         .btn-success-custom { background: linear-gradient(135deg, #10b981 0%, #059669 100%); }
         .btn-warning-custom { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); }
+        .btn-info-custom { background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%); }
 
         /* Reports Section */
         .reports-section {
@@ -414,6 +416,19 @@ require_once __DIR__ . '/includes/root_nav.php';
                 <p class="feature-description">نظام حجوزات متطور يساعدك على تتبع جميع الحجوزات وإدارتها بفعالية</p>
                 <a href="res.php" class="feature-btn btn-warning-custom" target="_blank">
                     الذهاب إلى الحجوزات
+                    <i class="bi bi-arrow-left"></i>
+                </a>
+            </div>
+
+            <!-- Pilgrim Departure Card -->
+            <div class="feature-card fade-in" style="animation-delay: 0.4s;">
+                <div class="feature-icon icon-info">
+                    <i class="bi bi-send-check"></i>
+                </div>
+                <h3 class="feature-title">ترحيل الحجاج</h3>
+                <p class="feature-description">قم بترحيل الحجاج فردياً أو حسب المجموعة أو حسب الفندق وتاريخ نهاية الحجز مع مراجعة الأسماء قبل التأكيد</p>
+                <a href="pilgrim_flight.php" class="feature-btn btn-info-custom" target="_blank">
+                    الذهاب إلى ترحيل الحجاج
                     <i class="bi bi-arrow-left"></i>
                 </a>
             </div>
