@@ -455,15 +455,16 @@ $hotels = $stmt_hotels->fetchAll();
                 },
                 processResults: function (data, params) {
                     params.page = params.page || 1;
-                    // Expect each item to have: barcode, name, passport
+                    // Expect each item to have: barcode, name, passport, group
                     return {
                         results: (data || []).map(function (item) {
                             var bc = item.barcode || '';
                             var nm = item.name || '';
                             var pp = item.passport || item.app_id || '';
+                            var group = item.group || '';
                             return {
                                 id: bc,
-                                text: (pp ? (pp + ' | ') : '') + (nm ? (nm + ' | ') : '') + bc
+                                text: [pp, nm, group, bc].filter(Boolean).join(' | ')
                             };
                         }),
                         pagination: { more: (data || []).length === 10 }

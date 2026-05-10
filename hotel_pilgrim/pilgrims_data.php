@@ -22,6 +22,11 @@ $stmt = $pdo->prepare("
           FROM pilgrim_flight pf
           WHERE pf.barcode = pilgrim.barcode
       )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM hotel_pilgrim hp
+          WHERE hp.barcode = pilgrim.barcode
+      )
     ORDER BY name COLLATE NOCASE ASC
     LIMIT 10
 ");

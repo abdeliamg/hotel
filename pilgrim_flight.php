@@ -419,8 +419,13 @@ $today = date('Y-m-d');
         </div>
 
         <div class="page-card">
-            <h4 class="section-title">إضافة ترحيل</h4>
-            <form id="departureForm">
+            <div class="d-flex align-items-center justify-content-between gap-3">
+                <h4 class="section-title mb-0">إضافة ترحيل</h4>
+                <button class="btn btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#departureForm" aria-expanded="false" aria-controls="departureForm">
+                    <i class="bi bi-chevron-down"></i> إظهار / إخفاء النموذج
+                </button>
+            </div>
+            <form id="departureForm" class="collapse mt-4">
                 <div class="row g-3">
                     <div class="col-md-4">
                         <label for="departedDate" class="form-label">تاريخ الترحيل</label>

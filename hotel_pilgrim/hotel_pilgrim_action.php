@@ -25,6 +25,21 @@ function hotel_pilgrim_is_departed(PDO $pdo, string $barcode): bool
     return (int)$stmt->fetchColumn() > 0;
 }
 
+function hotel_pilgrim_is_assigned(PDO $pdo, string $barcode, int $excludeId = 0): bool
+{
+    $sql = "SELECT COUNT(*) FROM hotel_pilgrim WHERE barcode = :barcode";
+    $params = [':barcode' => $barcode];
+
+    if ($excludeId > 0) {
+        $sql .= " AND id != :exclude_id";
+        $params[':exclude_id'] = $excludeId;
+    }
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    return (int)$stmt->fetchColumn() > 0;
+}
+
 function hotel_pilgrim_resolve_group(PDO $pdo, string $hotelName, string $floor, string $roomNum, string $masterGroup): ?string
 {
     if ($masterGroup !== '') {
@@ -96,6 +111,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'import_validate
             $errors[] = ['row' => $idx + 1, 'message' => 'لا يمكن إضافة حاج تم ترحيله.'];
             continue;
         }
+        if (hotel_pilgrim_is_assigned($pdo, $item['barcode'])) {
+            $errors[] = ['row' => $idx + 1, 'message' => 'هذا الحاج مضاف إلى غرفة مسبقاً.'];
+            continue;
+        }
 
         $resolvedGroup = hotel_pilgrim_resolve_group($pdo, $item['hotel_name'], $item['floor'], $item['room_num'], $master_group);
         if ($resolvedGroup === null) {
@@ -128,6 +147,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'import_batch') 
             $barcode = trim((string)($row['barcode'] ?? ''));
             if (hotel_pilgrim_is_departed($pdo, $barcode)) {
                 throw new RuntimeException('لا يمكن إضافة حاج تم ترحيله: ' . $barcode);
+            }
+            if (hotel_pilgrim_is_assigned($pdo, $barcode)) {
+                throw new RuntimeException('هذا الحاج مضاف إلى غرفة مسبقاً: ' . $barcode);
             }
             $groupName = hotel_pilgrim_resolve_group($pdo, $hotelName, $floor, $roomNum, $master_group);
             if ($groupName === null) {
@@ -166,6 +188,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'create') {
         echo json_encode(['success' => false, 'message' => 'لا يمكن إضافة حاج تم ترحيله.']);
         exit();
     }
+    if (hotel_pilgrim_is_assigned($pdo, (string)$barcode)) {
+        echo json_encode(['success' => false, 'message' => 'هذا الحاج مضاف إلى غرفة مسبقاً.']);
+        exit();
+    }
 
     $group_name = hotel_pilgrim_resolve_group($pdo, (string)$hotel_name, (string)$floor, (string)$room_num, $master_group);
     if ($group_name === null) {
@@ -202,6 +228,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'edit') {
 
     if (hotel_pilgrim_is_departed($pdo, (string)$barcode)) {
         echo json_encode(['success' => false, 'message' => 'لا يمكن اختيار حاج تم ترحيله.']);
+        exit();
+    }
+    if (hotel_pilgrim_is_assigned($pdo, (string)$barcode, (int)$id)) {
+        echo json_encode(['success' => false, 'message' => 'هذا الحاج مضاف إلى غرفة أخرى مسبقاً.']);
         exit();
     }
 
