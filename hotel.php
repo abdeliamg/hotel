@@ -26,10 +26,22 @@ function require_csrf(): void {
     }
 }
 
+// Only admins can add/edit/delete hotels. Plain `user` role has read-only access.
+$current_user = $GLOBALS['current_user'] ?? get_authenticated_user();
+$isHotelAdmin = $current_user && role_meets_requirement($current_user['role'] ?? '', 'admin');
+
+function require_hotel_admin(): void {
+    global $isHotelAdmin;
+    if (!$isHotelAdmin) {
+        json_respond(['status' => 'error', 'message' => 'صلاحيات غير كافية لإجراء هذه العملية.'], 403);
+    }
+}
+
 $action = $_POST['action'] ?? null;
 
 if ($action === 'add') {
     require_csrf();
+    require_hotel_admin();
     $hotel_name = trim($_POST['hotel_name'] ?? '');
     $address    = trim($_POST['address'] ?? '');
     $note       = trim($_POST['note'] ?? '');
@@ -53,6 +65,7 @@ if ($action === 'add') {
 
 if ($action === 'edit') {
     require_csrf();
+    require_hotel_admin();
     $hotel_id   = (int)($_POST['hotel_id'] ?? 0);
     $hotel_name = trim($_POST['hotel_name'] ?? '');
     $address    = trim($_POST['address'] ?? '');
@@ -100,6 +113,7 @@ if ($action === 'edit') {
 
 if ($action === 'delete') {
     require_csrf();
+    require_hotel_admin();
     $hotel_id = (int)($_POST['hotel_id'] ?? 0);
     if ($hotel_id <= 0) {
         json_respond(['status' => 'error', 'message' => 'معرّف غير صالح'], 400);
@@ -278,11 +292,13 @@ function note_as_safe_href(string $note): ?string {
     <div class="container">
         <h2 class="text-center mb-4">إدارة الفنادق</h2>
 
+        <?php if ($isHotelAdmin): ?>
         <div class="text-center mb-3">
             <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addHotelModal">
                 <i class="bi bi-plus-lg"></i> إضافة فندق جديد
             </button>
         </div>
+        <?php endif; ?>
 
         <table id="hotelsTable" class="table table-bordered table-striped w-100">
             <thead class="table-light">
@@ -295,7 +311,7 @@ function note_as_safe_href(string $note): ?string {
                     <th>الغرف المتاحة</th>
                     <th>الأسرّة المتاحة</th>
                     <th>إجمالي الحجاج</th>
-                    <th>الإجراءات</th>
+                    <?php if ($isHotelAdmin): ?><th>الإجراءات</th><?php endif; ?>
                 </tr>
             </thead>
             <tbody>
@@ -316,6 +332,7 @@ function note_as_safe_href(string $note): ?string {
                         <td class="detail-clickable" data-detail="available" title="عرض الغرف المتاحة"><?= e((string)$hotel['available_rooms']) ?></td>
                         <td><?= e((string)$hotel['available_beds']) ?></td>
                         <td class="detail-clickable" data-detail="pilgrims" title="عرض الحجاج"><?= e((string)$hotel['pilgrims_count']) ?></td>
+                        <?php if ($isHotelAdmin): ?>
                         <td class="actions-cell">
                             <button class="btn btn-success btn-sm edit-btn"
                                 data-id="<?= e((string)$hotel['id']) ?>"
@@ -330,6 +347,7 @@ function note_as_safe_href(string $note): ?string {
                                 <i class="bi bi-trash"></i> حذف
                             </button>
                         </td>
+                        <?php endif; ?>
                     </tr>
                 <?php endforeach; ?>
             </tbody>

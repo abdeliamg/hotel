@@ -35,6 +35,13 @@ if ($user) {
         }
     }
 }
+
+// Auto-redirect plain `user` role straight to /med_hotels.php — both for fresh
+// logins and for already-authenticated users revisiting /login.php.
+if ($loggedIn && isset($user['role']) && $user['role'] === 'user') {
+    header('Location: /med_hotels.php');
+    exit;
+}
 ?>
 
 <!DOCTYPE html>
