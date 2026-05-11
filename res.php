@@ -242,9 +242,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'download_template') {
 
     // Semicolon-separated; headers in Arabic (parser normalizes spaces to underscores and recognizes these aliases).
     $rows = [
-        ['الفندق', 'الطابق', 'رقم الغرفة', 'المجموعة', 'من', 'إلى', 'ملاحظات'],
-        ['فندق المثال', '3', '305', 'مجموعة النور', '2025-01-10', '2025-01-15', 'قريب من المصعد'],
-        ['فندق المثال', '4', '402', 'مجموعة الفجر', '2025-02-01', '2025-02-08', ''],
+        ['الفندق', 'الطابق', 'رقم الغرفة', 'التكتل', 'من', 'إلى', 'ملاحظات'],
+        ['فندق المثال', '3', '305', 'تكتل النور',  '2025-01-10', '2025-01-15', 'قريب من المصعد'],
+        ['فندق المثال', '4', '402', 'تكتل الفجر',  '2025-02-01', '2025-02-08', ''],
     ];
     foreach ($rows as $row) {
         fputcsv($out, $row, ';');
@@ -264,7 +264,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'bulk_validate') {
             'hotel_name' => ['hotel', 'الفندق'],
             'floor' => ['الطابق'],
             'room_num' => ['room'],
-            'group_name' => ['group', 'المجموعة'],
+            'group_name' => ['التكتل', 'master_group', 'group', 'المجموعة'],
             'start_date' => ['date_from', 'من'],
             'end_date' => ['date_to', 'إلى'],
             'note' => ['ملاحظات'],
@@ -280,6 +280,14 @@ if (isset($_POST['action']) && $_POST['action'] === 'bulk_validate') {
     $knownHotels = [];
     foreach ($pdo->query("SELECT hotel_name FROM hotel")->fetchAll(PDO::FETCH_COLUMN) as $hn) {
         $knownHotels[mb_strtolower(trim((string)$hn), 'UTF-8')] = true;
+    }
+
+    // Load known master_group values once for cross-checking (case-insensitive).
+    // The pasted "المجموعة/التكتل" cell is validated against group.master_group;
+    // the matched value is stored as-is in res.group_name (res.group_name = group.master_group).
+    $knownMasterGroups = [];
+    foreach ($pdo->query('SELECT DISTINCT master_group FROM "group" WHERE master_group IS NOT NULL AND TRIM(master_group) <> ""')->fetchAll(PDO::FETCH_COLUMN) as $mg) {
+        $knownMasterGroups[mb_strtolower(trim((string)$mg), 'UTF-8')] = true;
     }
 
     $errors = [];
@@ -308,6 +316,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'bulk_validate') {
             $errors[] = [
                 'row' => $idx + 1,
                 'message' => 'اسم الفندق غير موجود في جدول الفنادق: ' . $normalized['hotel_name'],
+            ];
+        }
+        if (!isset($knownMasterGroups[mb_strtolower($normalized['group_name'], 'UTF-8')])) {
+            $errors[] = [
+                'row' => $idx + 1,
+                'message' => 'التكتل غير موجود في جدول المجموعات: ' . $normalized['group_name'],
             ];
         }
     }
@@ -340,6 +354,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'bulk_add') {
     $knownHotels = [];
     foreach ($pdo->query("SELECT hotel_name FROM hotel")->fetchAll(PDO::FETCH_COLUMN) as $hn) {
         $knownHotels[mb_strtolower(trim((string)$hn), 'UTF-8')] = true;
+    }
+    // Defense-in-depth: enforce master_group existence (res.group_name = group.master_group).
+    $knownMasterGroups = [];
+    foreach ($pdo->query('SELECT DISTINCT master_group FROM "group" WHERE master_group IS NOT NULL AND TRIM(master_group) <> ""')->fetchAll(PDO::FETCH_COLUMN) as $mg) {
+        $knownMasterGroups[mb_strtolower(trim((string)$mg), 'UTF-8')] = true;
     }
 
     // Prepare reusable statements
@@ -400,6 +419,16 @@ if (isset($_POST['action']) && $_POST['action'] === 'bulk_add') {
                     'data'=> $rowData,
                     'status' => 'invalid',
                     'message'=> 'اسم الفندق غير موجود في جدول الفنادق: ' . $hotel_name,
+                ];
+                continue;
+            }
+
+            if (!isset($knownMasterGroups[mb_strtolower($group_name, 'UTF-8')])) {
+                $results[] = [
+                    'row' => $idx+1,
+                    'data'=> $rowData,
+                    'status' => 'invalid',
+                    'message'=> 'التكتل غير موجود في جدول المجموعات: ' . $group_name,
                 ];
                 continue;
             }
@@ -1060,8 +1089,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
                                 <div class="col-hint">رقم صحيح</div>
                             </div>
                             <div class="format-col required">
-                                <div class="col-label"><i class="bi bi-people"></i> المجموعة</div>
-                                <div class="col-hint">اسم المجموعة</div>
+                                <div class="col-label"><i class="bi bi-diagram-3"></i> التكتل</div>
+                                <div class="col-hint">يجب أن يطابق <code>master_group</code> في جدول المجموعات</div>
                             </div>
                             <div class="format-col required">
                                 <div class="col-label"><i class="bi bi-calendar-event"></i> من</div>

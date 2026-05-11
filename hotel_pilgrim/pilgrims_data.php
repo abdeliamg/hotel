@@ -1,22 +1,34 @@
 <?php
 require_once __DIR__ . '/../includes/auth.php';
+require_once __DIR__ . '/mg_cookie.php';
 
-$master_group = trim((string)($_COOKIE['master_group'] ?? ''));
-$user = get_authenticated_user();
+$master_group = mg_cookie_get();
+$user         = get_authenticated_user();
+$isAdmin      = $user && role_meets_requirement($user['role'] ?? '', 'admin');
 
-if ($master_group === '' && !$user) {
+// Gate: admins are allowed; otherwise a master_group cookie is required.
+if (!$isAdmin && $master_group === '') {
     http_response_code(403);
     exit();
 }
 
-// Get the search term from the AJAX request
-$term = isset($_GET['q']) ? $_GET['q'] : '';
+$term       = isset($_GET['q']) ? (string)$_GET['q'] : '';
+$searchTerm = '%' . $term . '%';
 
-// Prepare and execute the query to search for barcode, name, or group in the pilgrim table
-$stmt = $pdo->prepare("
-    SELECT barcode, app_id as passport, name, `group`
+// Build the scoping clause: admins see all; non-admins are limited to pilgrims
+// whose `group` belongs to the logged-in master_group (one master_group → many groups).
+$scopeSql = '';
+$params   = [':term' => $searchTerm];
+if (!$isAdmin) {
+    $scopeSql = ' AND pilgrim."group" IN (SELECT "group" FROM "group" WHERE master_group = :mg) ';
+    $params[':mg'] = $master_group;
+}
+
+$sql = '
+    SELECT barcode, app_id AS passport, name, "group"
     FROM pilgrim
-    WHERE (barcode LIKE :term OR app_id LIKE :term OR name LIKE :term OR `group` LIKE :term)
+    WHERE (barcode LIKE :term OR app_id LIKE :term OR name LIKE :term OR "group" LIKE :term)
+      ' . $scopeSql . '
       AND NOT EXISTS (
           SELECT 1
           FROM pilgrim_flight pf
@@ -29,12 +41,11 @@ $stmt = $pdo->prepare("
       )
     ORDER BY name COLLATE NOCASE ASC
     LIMIT 10
-");
-$searchTerm = "%$term%";
-$stmt->bindParam(':term', $searchTerm);
-$stmt->execute();
+';
 
-// Fetch the results and return them as JSON
+$stmt = $pdo->prepare($sql);
+$stmt->execute($params);
+
 $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 header('Content-Type: application/json; charset=UTF-8');
-echo json_encode($results);
+echo json_encode($results, JSON_UNESCAPED_UNICODE);

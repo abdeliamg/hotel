@@ -1,12 +1,13 @@
 <?php
 session_start();
-if (!isset($_COOKIE['master_group'])) {
+require_once __DIR__ . '/mg_cookie.php';
+$master_group = mg_cookie_get();
+if ($master_group === '') {
     header('Location: /hotel_pilgrim/login.php');
     exit();
 }
 
 require_once __DIR__ . '/nav.php';
-$master_group = $_COOKIE['master_group'];
 
 $pdo = new PDO('sqlite:../hajj_data.db');
 $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);

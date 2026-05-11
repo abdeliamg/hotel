@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 include('../check.php');
 require_once __DIR__ . '/nav.php';
+require_once __DIR__ . '/mg_cookie.php';
 
 // ---------- DB SETUP ----------
 $pdo = new PDO('sqlite:../hajj_data.db');
@@ -10,7 +11,7 @@ $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
 // Optional cookie read (kept in case other back-end endpoints rely on it)
-$master_group = $_COOKIE['master_group'] ?? '';
+$master_group = mg_cookie_get();
 
 // Small helper for safe HTML
 function e(string $v): string { return htmlspecialchars($v, ENT_QUOTES, 'UTF-8'); }
@@ -318,7 +319,7 @@ $hotels = $stmt_hotels->fetchAll();
 </head>
 <body>
     <div class="container">
-        <?php render_hotel_pilgrim_navbar('all', $_COOKIE['master_group'] ?? ''); ?>
+        <?php render_hotel_pilgrim_navbar('all', $master_group); ?>
         <h1 class="text-center">إدارة إسكان الحجاج</h1>
 
         <button class="btn btn-primary" id="createBtn">

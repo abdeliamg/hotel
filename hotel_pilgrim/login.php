@@ -3,6 +3,7 @@ ini_set('display_errors', 1);
 ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 session_start();
+require_once __DIR__ . '/mg_cookie.php';
 $pdo = new PDO('sqlite:../hajj_data.db');
 $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
@@ -20,7 +21,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $expected_password = $user['id'] * 50;
         if ($password == $expected_password) {
             // Set cookie for master_group
-            setcookie('master_group', $username, time() + (86400 * 30), "/"); // 30 days cookie
+            mg_cookie_set($username, time() + (86400 * 30), "/"); // 30 days cookie (base64-encoded)
             
             // Redirect to the hotel_pilgrim page after login
             header('Location: /hotel_pilgrim/hotel_pilgrim.php');

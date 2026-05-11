@@ -1,6 +1,8 @@
 <?php
 session_start();
-if (!isset($_COOKIE['master_group'])) {
+require_once __DIR__ . '/mg_cookie.php';
+$master_group = mg_cookie_get();
+if ($master_group === '') {
     exit();
 }
 

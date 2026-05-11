@@ -1,7 +1,8 @@
 <?php
 require_once __DIR__ . '/../includes/auth.php';
+require_once __DIR__ . '/mg_cookie.php';
 
-$master_group = trim((string)($_COOKIE['master_group'] ?? ''));
+$master_group = mg_cookie_get();
 $user = get_authenticated_user();
 
 if ($master_group === '' && !$user) {

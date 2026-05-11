@@ -5,12 +5,13 @@ ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 require_once __DIR__ . '/../includes/paste_import.php';
 require_once __DIR__ . '/../includes/auth.php';
+require_once __DIR__ . '/mg_cookie.php';
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-$master_group = trim((string)($_COOKIE['master_group'] ?? ''));
+$master_group = mg_cookie_get();
 $current_user = get_authenticated_user();
 
 if ($master_group === '' && !$current_user) {
