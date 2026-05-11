@@ -173,6 +173,7 @@ if ($user) {
     <a href="hotel.php" class="btn btn-info" style="flex: 1;margin-right: 10px;margin-bottom: 10px;padding: 16px;min-width: 150px;">الفنادق</a>
     <a href="room.php" class="btn btn-info" style="flex: 1;margin-right: 10px;margin-bottom: 10px;padding: 16px;min-width: 150px;">الغرف</a>
     <a href="res.php" class="btn btn-info" style="flex: 1;margin-right: 10px;margin-bottom: 10px;padding: 16px;min-width: 150px;">الحجوزات</a>
+    <a href="distribute/" class="btn btn-info" style="flex: 1;margin-right: 10px;margin-bottom: 10px;padding: 16px;min-width: 150px;">توزيع الغرف</a>
     <a href="med_hotels.php" class="btn btn-info" style="flex: 1;margin-right: 10px;margin-bottom: 10px;padding: 16px;min-width: 150px;">فنادق المدينة</a>
     <?php endif; ?>
     </div>
