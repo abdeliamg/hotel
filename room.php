@@ -193,6 +193,35 @@ if (isset($_POST['action']) && $_POST['action'] === 'datatable') {
 }
 
 // ========================
+// CSV template download (GET)
+// ========================
+if (isset($_GET['action']) && $_GET['action'] === 'download_template') {
+    $filename = 'rooms_template_' . date('Ymd_His') . '.csv';
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('Cache-Control: no-store, no-cache, must-revalidate');
+
+    // UTF-8 BOM so Excel renders Arabic correctly
+    echo "\xEF\xBB\xBF";
+
+    $out = fopen('php://output', 'w');
+
+    // Semicolon-separated so Excel (esp. Arabic locales) opens it correctly without an import wizard.
+    // Headers in Arabic; parser normalizes spaces to underscores and recognizes these aliases.
+    $rows = [
+        ['رقم الغرفة', 'نوع الغرفة', 'الفندق', 'الطابق', 'من', 'إلى', 'العقد', 'ملاحظات'],
+        ['101', '1', 'فندق المثال', '3', '2025-01-01', '2025-01-10', 'C-001', 'غرفة مطلة'],
+        ['102', '2', 'فندق المثال', '4', '2025-02-01', '2025-02-15', '',      ''],
+    ];
+    foreach ($rows as $row) {
+        fputcsv($out, $row, ';');
+    }
+
+    fclose($out);
+    exit;
+}
+
+// ========================
 // AJAX endpoints (CRUD / bulk)
 // ========================
 
@@ -324,6 +353,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'bulk_validate') {
         json_out(['status' => 'error', 'message' => $parsed['message']]);
     }
 
+    // Load known hotel names once for cross-checking
+    $knownHotels = [];
+    foreach ($pdo->query("SELECT hotel_name FROM hotel")->fetchAll(PDO::FETCH_COLUMN) as $hn) {
+        $knownHotels[mb_strtolower(trim((string)$hn), 'UTF-8')] = true;
+    }
+
     $rows = [];
     $errors = [];
     foreach ($parsed['rows'] as $idx => $r) {
@@ -340,7 +375,16 @@ if (isset($_POST['action']) && $_POST['action'] === 'bulk_validate') {
         $rows[] = $item;
 
         if ($item['room_num'] === '' || $item['room_type'] === '' || $item['hotel_name'] === '' || $item['floor'] === '') {
-            $errors[] = ['index' => $idx, 'message' => 'حقول مطلوبة ناقصة (room_num, room_type, hotel_name, floor).'];
+            $errors[] = ['index' => $idx, 'message' => 'حقول مطلوبة ناقصة (رقم الغرفة، نوع الغرفة، الفندق، الطابق).'];
+            continue;
+        }
+
+        $hotelKey = mb_strtolower($item['hotel_name'], 'UTF-8');
+        if (!isset($knownHotels[$hotelKey])) {
+            $errors[] = [
+                'index' => $idx,
+                'message' => 'اسم الفندق غير موجود في جدول الفنادق: ' . $item['hotel_name'],
+            ];
         }
     }
 
@@ -366,6 +410,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'bulk_add') {
         json_out(['status' => 'error', 'message' => 'Invalid rows payload']);
     }
 
+    // Defense-in-depth: also enforce hotel existence here.
+    $knownHotels = [];
+    foreach ($pdo->query("SELECT hotel_name FROM hotel")->fetchAll(PDO::FETCH_COLUMN) as $hn) {
+        $knownHotels[mb_strtolower(trim((string)$hn), 'UTF-8')] = true;
+    }
+
     $results = [];
     foreach ($rows as $idx => $r) {
         try {
@@ -383,6 +433,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'bulk_add') {
                     'index'   => $idx,
                     'status'  => 'error',
                     'message' => 'Missing required fields (room_num, room_type, hotel_name, floor).'
+                ];
+                continue;
+            }
+
+            if (!isset($knownHotels[mb_strtolower($hotel, 'UTF-8')])) {
+                $results[] = [
+                    'index'   => $idx,
+                    'status'  => 'error',
+                    'message' => 'اسم الفندق غير موجود في جدول الفنادق: ' . $hotel,
                 ];
                 continue;
             }
@@ -525,6 +584,7 @@ try {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>إدارة الغرف</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
     <link href="https://cdn.datatables.net/1.10.24/css/jquery.dataTables.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap" rel="stylesheet">
     <style>
@@ -547,6 +607,76 @@ try {
             background: #f8f9fa; padding: .75rem; border-radius: .5rem; border: 1px solid #e9ecef;
             direction: ltr; text-align: left; white-space: pre-wrap;
         }
+        .format-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 14px 16px;
+            margin-bottom: 14px;
+        }
+        .format-card .format-title {
+            font-weight: 700;
+            color: #0f172a;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .format-card .format-title i { color: #2563eb; }
+        .format-card .format-actions { margin-inline-start: auto; }
+        .format-cols {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .format-col {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 13px;
+        }
+        .format-col .col-label {
+            font-weight: 600;
+            color: #1e293b;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .format-col .col-hint {
+            font-size: 11px;
+            color: #64748b;
+            margin-top: 2px;
+        }
+        .format-col.required .col-label::after {
+            content: '*';
+            color: #dc2626;
+            font-weight: 700;
+        }
+        .format-example {
+            background: #ffffff;
+            border: 1px dashed #cbd5e1;
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 12px;
+            color: #475569;
+            direction: ltr;
+            text-align: left;
+            font-family: 'Consolas', 'Courier New', monospace;
+            overflow-x: auto;
+        }
+        .format-example code { color: #0f172a; }
+        .format-tip {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #64748b;
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+        }
+        .format-tip i { color: #f59e0b; margin-top: 2px; }
         .badge-status { font-size: .85rem; }
         .table-fixed-head thead th { position: sticky; top: 0; background: #fff; z-index: 1; }
         .alert-compact { padding: .5rem .75rem; }
@@ -738,12 +868,65 @@ try {
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="mb-2 small-muted">
-                        الصيغة المتوقعة للصف (مفصولة بعلامة تبويب <code>\t</code>):
+                    <div class="format-card">
+                        <div class="format-title d-flex flex-wrap align-items-center">
+                            <i class="bi bi-table"></i>
+                            <span>صيغة البيانات المتوقعة</span>
+                            <div class="format-actions">
+                                <a class="btn btn-success btn-sm" href="room.php?action=download_template" download>
+                                    <i class="bi bi-download"></i>
+                                    تنزيل ملف CSV نموذجي
+                                </a>
+                            </div>
+                        </div>
+
+                        <div class="format-cols">
+                            <div class="format-col required">
+                                <div class="col-label"><i class="bi bi-hash"></i> رقم الغرفة</div>
+                                <div class="col-hint">رقم صحيح</div>
+                            </div>
+                            <div class="format-col required">
+                                <div class="col-label"><i class="bi bi-people"></i> نوع الغرفة</div>
+                                <div class="col-hint">عدد الأسرّة (1, 2, 3 ...)</div>
+                            </div>
+                            <div class="format-col required">
+                                <div class="col-label"><i class="bi bi-building"></i> الفندق</div>
+                                <div class="col-hint">يجب أن يطابق اسم فندق موجود</div>
+                            </div>
+                            <div class="format-col required">
+                                <div class="col-label"><i class="bi bi-layers"></i> الطابق</div>
+                                <div class="col-hint">رقم الطابق</div>
+                            </div>
+                            <div class="format-col">
+                                <div class="col-label"><i class="bi bi-calendar-event"></i> من</div>
+                                <div class="col-hint">YYYY-MM-DD أو DD/MM/YYYY</div>
+                            </div>
+                            <div class="format-col">
+                                <div class="col-label"><i class="bi bi-calendar-check"></i> إلى</div>
+                                <div class="col-hint">YYYY-MM-DD أو DD/MM/YYYY</div>
+                            </div>
+                            <div class="format-col">
+                                <div class="col-label"><i class="bi bi-file-text"></i> العقد</div>
+                                <div class="col-hint">رقم العقد (اختياري)</div>
+                            </div>
+                            <div class="format-col">
+                                <div class="col-label"><i class="bi bi-sticky"></i> ملاحظات</div>
+                                <div class="col-hint">نص حر (اختياري)</div>
+                            </div>
+                        </div>
+
+                        <div class="format-example">
+                            <code>101 &nbsp; 1 &nbsp; فندق المثال &nbsp; 3 &nbsp; 2025-01-01 &nbsp; 2025-01-10 &nbsp; C-001 &nbsp; غرفة مطلة</code>
+                        </div>
+
+                        <div class="format-tip">
+                            <i class="bi bi-info-circle"></i>
+                            <span>
+                                نزِّل الملف النموذجي، عبّئه في Excel، ثم انسخ الصفوف (بما فيها صف العناوين) والصقها في الحقل أدناه.
+                                الأعمدة المطلوبة موسومة بـ <span class="text-danger">*</span>.
+                            </span>
+                        </div>
                     </div>
-                    <pre class="format-sample">room_num[TAB]room_type[TAB]hotel_name[TAB]floor[TAB]date_from[TAB]date_to[TAB]contract[TAB]note
-101[TAB]1[TAB]Al Haram Hotel[TAB]3[TAB]2025-01-01[TAB]2025-01-10[TAB]C-001[TAB]غرفة مطلة
-102[TAB]2[TAB]Al Haram Hotel[TAB]4[TAB]01/02/2025[TAB]15/02/2025[TAB][TAB]</pre>
 
                     <textarea id="bulkTextarea" class="form-control" rows="8" placeholder="الصق من Excel هنا (أعمدة مفصولة بعلامة تبويب)"></textarea>
 

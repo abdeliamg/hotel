@@ -227,6 +227,34 @@ if (isset($_POST['action']) && $_POST['action'] === 'delete') {
 }
 
 // ---------------------------------
+// CSV template download (GET)
+// ---------------------------------
+if (isset($_GET['action']) && $_GET['action'] === 'download_template') {
+    $filename = 'reservations_template_' . date('Ymd_His') . '.csv';
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('Cache-Control: no-store, no-cache, must-revalidate');
+
+    // UTF-8 BOM so Excel renders Arabic correctly
+    echo "\xEF\xBB\xBF";
+
+    $out = fopen('php://output', 'w');
+
+    // Semicolon-separated; headers in Arabic (parser normalizes spaces to underscores and recognizes these aliases).
+    $rows = [
+        ['الفندق', 'الطابق', 'رقم الغرفة', 'المجموعة', 'من', 'إلى', 'ملاحظات'],
+        ['فندق المثال', '3', '305', 'مجموعة النور', '2025-01-10', '2025-01-15', 'قريب من المصعد'],
+        ['فندق المثال', '4', '402', 'مجموعة الفجر', '2025-02-01', '2025-02-08', ''],
+    ];
+    foreach ($rows as $row) {
+        fputcsv($out, $row, ';');
+    }
+
+    fclose($out);
+    exit;
+}
+
+// ---------------------------------
 // BULK Add reservations (Paste from Excel)  -- unchanged logic
 // ---------------------------------
 if (isset($_POST['action']) && $_POST['action'] === 'bulk_validate') {
@@ -246,6 +274,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'bulk_validate') {
 
     if (!$parsed['ok']) {
         json_response(['status' => 'error', 'message' => $parsed['message']]);
+    }
+
+    // Load known hotel names once for cross-checking (case-insensitive)
+    $knownHotels = [];
+    foreach ($pdo->query("SELECT hotel_name FROM hotel")->fetchAll(PDO::FETCH_COLUMN) as $hn) {
+        $knownHotels[mb_strtolower(trim((string)$hn), 'UTF-8')] = true;
     }
 
     $errors = [];
@@ -268,6 +302,13 @@ if (isset($_POST['action']) && $_POST['action'] === 'bulk_validate') {
         }
         if (!date_less_equal($normalized['start_date'], $normalized['end_date'])) {
             $errors[] = ['row' => $idx + 1, 'message' => 'تاريخ البدء أكبر من تاريخ الانتهاء.'];
+            continue;
+        }
+        if (!isset($knownHotels[mb_strtolower($normalized['hotel_name'], 'UTF-8')])) {
+            $errors[] = [
+                'row' => $idx + 1,
+                'message' => 'اسم الفندق غير موجود في جدول الفنادق: ' . $normalized['hotel_name'],
+            ];
         }
     }
 
@@ -294,6 +335,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'bulk_add') {
     $lines = preg_split('/\r\n|\n|\r/', trim($rowsText));
     $results = [];
     $inserted = 0;
+
+    // Defense-in-depth: enforce hotel existence here too.
+    $knownHotels = [];
+    foreach ($pdo->query("SELECT hotel_name FROM hotel")->fetchAll(PDO::FETCH_COLUMN) as $hn) {
+        $knownHotels[mb_strtolower(trim((string)$hn), 'UTF-8')] = true;
+    }
 
     // Prepare reusable statements
     $stmtInsert = $pdo->prepare('INSERT INTO res (hotel_name, floor, room_num, group_name, start_date, end_date, note)
@@ -343,6 +390,16 @@ if (isset($_POST['action']) && $_POST['action'] === 'bulk_add') {
                     'data'=> $rowData,
                     'status' => 'invalid',
                     'message'=> 'تاريخ البدء أكبر من تاريخ الانتهاء.'
+                ];
+                continue;
+            }
+
+            if (!isset($knownHotels[mb_strtolower($hotel_name, 'UTF-8')])) {
+                $results[] = [
+                    'row' => $idx+1,
+                    'data'=> $rowData,
+                    'status' => 'invalid',
+                    'message'=> 'اسم الفندق غير موجود في جدول الفنادق: ' . $hotel_name,
                 ];
                 continue;
             }
@@ -742,6 +799,78 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
             .btn-sm{padding:5px 10px;font-size:12px}
             .modal-body{padding:16px}
         }
+
+        /* Bulk-add format card */
+        .format-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 14px 16px;
+            margin-bottom: 14px;
+        }
+        .format-card .format-title {
+            font-weight: 700;
+            color: #0f172a;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .format-card .format-title i { color: #2563eb; }
+        .format-card .format-actions { margin-inline-start: auto; }
+        .format-cols {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .format-col {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 13px;
+        }
+        .format-col .col-label {
+            font-weight: 600;
+            color: #1e293b;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .format-col .col-hint {
+            font-size: 11px;
+            color: #64748b;
+            margin-top: 2px;
+        }
+        .format-col.required .col-label::after {
+            content: '*';
+            color: #dc2626;
+            font-weight: 700;
+        }
+        .format-example {
+            background: #ffffff;
+            border: 1px dashed #cbd5e1;
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 12px;
+            color: #475569;
+            direction: ltr;
+            text-align: left;
+            font-family: 'Consolas', 'Courier New', monospace;
+            overflow-x: auto;
+        }
+        .format-example code { color: #0f172a; }
+        .format-tip {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #64748b;
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+        }
+        .format-tip i { color: #f59e0b; margin-top: 2px; }
     </style>
 </head>
 <body>
@@ -905,16 +1034,62 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="إغلاق"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label"><i class="bi bi-info-circle"></i> تعليمات:</label>
-                        <div class="alert alert-light border">
-                            الصق صفوف من إكسل حيث تكون الأعمدة مفصولة بعلامة <code>Tab</code> وبالترتيب التالي:<br>
-                            <strong>اسم الفندق</strong> | <strong>الطابق</strong> | <strong>رقم الغرفة</strong> | <strong>اسم المجموعة</strong> | <strong>تاريخ البدء (YYYY-MM-DD)</strong> | <strong>تاريخ الانتهاء (YYYY-MM-DD)</strong> | <strong>ملاحظات (اختياري)</strong>
-                            <hr class="my-2">
-                            مثال:<br>
-                            فندق مكة\t3\t305\tمجموعة النور\t2025-01-10\t2025-01-15\tقريب من المصعد
+                    <div class="format-card">
+                        <div class="format-title d-flex flex-wrap align-items-center">
+                            <i class="bi bi-table"></i>
+                            <span>صيغة البيانات المتوقعة</span>
+                            <div class="format-actions">
+                                <a class="btn btn-success btn-sm" href="res.php?action=download_template" download>
+                                    <i class="bi bi-download"></i>
+                                    تنزيل ملف CSV نموذجي
+                                </a>
+                            </div>
+                        </div>
+
+                        <div class="format-cols">
+                            <div class="format-col required">
+                                <div class="col-label"><i class="bi bi-building"></i> الفندق</div>
+                                <div class="col-hint">يجب أن يطابق اسم فندق موجود</div>
+                            </div>
+                            <div class="format-col required">
+                                <div class="col-label"><i class="bi bi-layers"></i> الطابق</div>
+                                <div class="col-hint">رقم الطابق</div>
+                            </div>
+                            <div class="format-col required">
+                                <div class="col-label"><i class="bi bi-door-closed"></i> رقم الغرفة</div>
+                                <div class="col-hint">رقم صحيح</div>
+                            </div>
+                            <div class="format-col required">
+                                <div class="col-label"><i class="bi bi-people"></i> المجموعة</div>
+                                <div class="col-hint">اسم المجموعة</div>
+                            </div>
+                            <div class="format-col required">
+                                <div class="col-label"><i class="bi bi-calendar-event"></i> من</div>
+                                <div class="col-hint">YYYY-MM-DD أو DD/MM/YYYY</div>
+                            </div>
+                            <div class="format-col required">
+                                <div class="col-label"><i class="bi bi-calendar-check"></i> إلى</div>
+                                <div class="col-hint">YYYY-MM-DD أو DD/MM/YYYY</div>
+                            </div>
+                            <div class="format-col">
+                                <div class="col-label"><i class="bi bi-sticky"></i> ملاحظات</div>
+                                <div class="col-hint">نص حر (اختياري)</div>
+                            </div>
+                        </div>
+
+                        <div class="format-example">
+                            <code>فندق المثال &nbsp; 3 &nbsp; 305 &nbsp; مجموعة النور &nbsp; 2025-01-10 &nbsp; 2025-01-15 &nbsp; قريب من المصعد</code>
+                        </div>
+
+                        <div class="format-tip">
+                            <i class="bi bi-info-circle"></i>
+                            <span>
+                                نزِّل الملف النموذجي، عبّئه في Excel، ثم انسخ الصفوف (بما فيها صف العناوين) والصقها في الحقل أدناه.
+                                الأعمدة المطلوبة موسومة بـ <span class="text-danger">*</span>.
+                            </span>
                         </div>
                     </div>
+
                     <div class="mb-3">
                         <label for="bulkRows" class="form-label"><i class="bi bi-clipboard"></i> الصق البيانات هنا:</label>
                         <textarea class="form-control" id="bulkRows" rows="10" placeholder="الصق الصفوف هنا..."></textarea>
