@@ -14,6 +14,7 @@ $db = new SQLite3('hajj_data.db');
 $groups = [];          // array of ['group' => ..., 'phone' => ...]
 $groupNames = [];      // simple array of group names for validation
 
+
 $res = $db->query(
     'SELECT "group", COALESCE(group_phone,"") AS phone
      FROM "group"
