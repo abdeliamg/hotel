@@ -16,7 +16,7 @@
  */
 return [
     // Must match the "Secret" field on GitHub's webhook settings.
-    'secret' => 'change-me-to-a-long-random-string',
+    'secret' => 'efghrdfhtrr44rgd',
 
     // Absolute path on the server where the .git folder lives (often = public_html).
     // On CyberPanel, __DIR__ works only if webhook_secret.local.php sits next to whookj43.php
