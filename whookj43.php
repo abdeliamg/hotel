@@ -2,10 +2,13 @@
 /**
  * GitHub webhook receiver: verifies HMAC signature and optionally runs git pull.
  *
+ * Production (CyberPanel): https://hotel.abdalmenem.com/whookj43.php
+ *
  * Setup:
- * 1. Copy webhook_secret.example.php → webhook_secret.local.php and edit it.
- * 2. On GitHub: Settings → Webhooks → Add webhook → point to this URL, same secret.
- * 3. Ensure the web server user can run git in repo_path (deploy keys / credentials).
+ * 1. Copy webhook_secret.example.php → webhook_secret.local.php on the server (public_html).
+ * 2. GitHub → Webhooks → Payload URL = URL above, same secret as in webhook_secret.local.php.
+ * 3. repo_path must be the server path to public_html where .git exists; www-data/nobody must
+ *    be able to run `git pull` there (permissions + deploy key or HTTPS credential).
  */
 declare(strict_types=1);
 
