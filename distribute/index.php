@@ -1,3 +1,7 @@
+<?php
+require_once __DIR__ . '/../check.php';
+require_once __DIR__ . '/../includes/root_nav.php';
+?>
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -593,10 +597,14 @@
 </head>
 <body>
 
+<div class="container-fluid pt-2">
+    <?php render_root_navbar('distribute'); ?>
+</div>
+
 <header class="page-header">
     <div class="container d-flex flex-wrap justify-content-between align-items-center gap-2">
         <h1><i class="bi bi-grid-3x3-gap-fill"></i> توزيع غرف الفندق</h1>
-        <a class="header-link" href="/login.php"><i class="bi bi-house-door"></i> الرئيسية</a>
+        <a class="header-link" href="/med_hotels.php"><i class="bi bi-house-door"></i> الرئيسية</a>
     </div>
 </header>
 
