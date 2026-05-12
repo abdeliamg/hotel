@@ -4,3 +4,4 @@
 
 # GitHub webhook local secret (never commit)
 webhook_secret.local.php
+webhook_secret.php
