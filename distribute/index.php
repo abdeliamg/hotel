@@ -11,6 +11,8 @@ require_once __DIR__ . '/../includes/root_nav.php';
 
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.rtl.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css" rel="stylesheet">
 
     <style>
         :root {
@@ -610,6 +612,11 @@ require_once __DIR__ . '/../includes/root_nav.php';
             <div class="card-surface input-card">
                 <div class="card-title"><i class="bi bi-door-closed"></i> بيانات الغرف</div>
                 <div class="hint">صيغة كل سطر: <code>رقم الغرفة</code> &lt;Tab&gt; <code>نوع الغرفة</code></div>
+                <div class="mb-2">
+                    <button type="button" class="btn btn-outline-primary btn-sm" id="btnOpenAutoFillRooms">
+                        <i class="bi bi-magic"></i> تعبئة تلقائية من الغرف المتاحة
+                    </button>
+                </div>
                 <textarea id="roomsInput" placeholder="مثال:&#10;101&#9;2&#10;102&#9;2&#10;201&#9;3"></textarea>
                 <div class="counter">
                     <span>الأسطر المكتشفة:</span>
@@ -801,7 +808,76 @@ require_once __DIR__ . '/../includes/root_nav.php';
     <span class="fab-badge" id="fabCount"></span>
 </button>
 
+<!-- Auto-fill rooms modal -->
+<div class="modal fade" id="autoFillRoomsModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header" style="background: linear-gradient(135deg, #0f172a 0%, #2563eb 100%); color: #fff;">
+                <h5 class="modal-title"><i class="bi bi-magic"></i> تعبئة تلقائية من الغرف المتاحة</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3">
+                    <div class="col-md-7">
+                        <label class="form-label fw-bold" for="autoFillHotel">
+                            <i class="bi bi-building"></i> الفندق
+                        </label>
+                        <select class="form-select" id="autoFillHotel">
+                            <option value="">اختر فندقًا</option>
+                        </select>
+                    </div>
+                    <div class="col-md-5">
+                        <label class="form-label fw-bold" for="autoFillDateFrom">
+                            <i class="bi bi-calendar-event"></i> تاريخ البداية
+                        </label>
+                        <input type="date" class="form-control" id="autoFillDateFrom">
+                    </div>
+                </div>
+
+                <div class="d-flex gap-2 mt-3">
+                    <button type="button" class="btn btn-primary" id="btnAutoFillValidate">
+                        <i class="bi bi-search"></i> تحقق
+                    </button>
+                    <button type="button" class="btn btn-success" id="btnAutoFillApply" disabled>
+                        <i class="bi bi-check2-circle"></i> تعبئة الحقل
+                    </button>
+                    <span id="autoFillStatus" class="text-muted align-self-center small"></span>
+                </div>
+
+                <hr>
+
+                <div class="table-responsive" style="max-height: 360px;">
+                    <table class="table table-sm table-hover align-middle">
+                        <thead class="table-light" style="position: sticky; top: 0;">
+                            <tr>
+                                <th>#</th>
+                                <th>رقم الغرفة</th>
+                                <th>النوع</th>
+                                <th>الطابق</th>
+                                <th>من</th>
+                                <th>إلى</th>
+                            </tr>
+                        </thead>
+                        <tbody id="autoFillPreviewBody">
+                            <tr><td colspan="6" class="text-center text-muted py-4">
+                                اختر الفندق وتاريخ البداية ثم اضغط <strong>تحقق</strong> لمعاينة الغرف
+                            </td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                    <i class="bi bi-x-circle"></i> إغلاق
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
 <script src="script.js"></script>
 </body>
 </html>

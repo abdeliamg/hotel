@@ -1003,6 +1003,141 @@ function showToast(message, type) {
 }
 
 // ============================================================================
+// Auto-fill rooms from DB (hotel + date_from) -> textarea (room_num<TAB>room_type)
+// ============================================================================
+
+let autoFillPreviewRows = [];
+
+function initAutoFillRoomsModal() {
+    const btnOpen     = document.getElementById('btnOpenAutoFillRooms');
+    const modalEl     = document.getElementById('autoFillRoomsModal');
+    const btnValidate = document.getElementById('btnAutoFillValidate');
+    const btnApply    = document.getElementById('btnAutoFillApply');
+    const statusEl    = document.getElementById('autoFillStatus');
+    const tbody       = document.getElementById('autoFillPreviewBody');
+    const dateEl      = document.getElementById('autoFillDateFrom');
+
+    if (!btnOpen || !modalEl || typeof bootstrap === 'undefined' || typeof window.jQuery === 'undefined') return;
+
+    const $hotel = window.jQuery('#autoFillHotel');
+    $hotel.select2({
+        placeholder: 'ابحث عن فندق...',
+        width: '100%',
+        dir: 'rtl',
+        theme: 'bootstrap-5',
+        dropdownParent: window.jQuery('#autoFillRoomsModal'),
+        ajax: {
+            url: '../res_hotels.php',
+            dataType: 'json',
+            delay: 250,
+            data: params => ({ q: params.term || '', page: params.page || 1 }),
+            processResults: (data, params) => {
+                params.page = params.page || 1;
+                return {
+                    results: data.results || [],
+                    pagination: { more: !!(data.pagination && data.pagination.more) },
+                };
+            },
+        },
+    });
+
+    const bsModal = new bootstrap.Modal(modalEl);
+    btnOpen.addEventListener('click', () => bsModal.show());
+
+    modalEl.addEventListener('hidden.bs.modal', () => {
+        autoFillPreviewRows = [];
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">اختر الفندق وتاريخ البداية ثم اضغط <strong>تحقق</strong> لمعاينة الغرف</td></tr>';
+        btnApply.disabled = true;
+        statusEl.textContent = '';
+    });
+
+    btnValidate.addEventListener('click', () => {
+        const hotel = $hotel.val();
+        const dateFrom = dateEl.value;
+
+        if (!hotel) {
+            showToast('اختر الفندق أولاً', 'warning');
+            return;
+        }
+        if (!dateFrom) {
+            showToast('اختر تاريخ البداية', 'warning');
+            return;
+        }
+
+        statusEl.textContent = 'جارٍ التحميل...';
+        btnApply.disabled = true;
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3"><div class="spinner-border spinner-border-sm"></div> جارٍ التحقق...</td></tr>';
+
+        const url = 'get_rooms_by_hotel_date.php?hotel=' + encodeURIComponent(hotel) + '&date_from=' + encodeURIComponent(dateFrom);
+
+        fetch(url, { credentials: 'same-origin' })
+            .then(r => r.json())
+            .then(data => {
+                if (!data || data.status !== 'ok') {
+                    statusEl.textContent = '';
+                    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-danger py-3">' + ((data && data.message) || 'فشل التحميل') + '</td></tr>';
+                    return;
+                }
+
+                autoFillPreviewRows = data.results || [];
+
+                if (autoFillPreviewRows.length === 0) {
+                    statusEl.textContent = '';
+                    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">لا توجد غرف بتاريخ البداية المحدد لهذا الفندق</td></tr>';
+                    btnApply.disabled = true;
+                    return;
+                }
+
+                const frag = document.createDocumentFragment();
+                autoFillPreviewRows.forEach((r, i) => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML =
+                        '<td>' + (i + 1) + '</td>' +
+                        '<td><strong>' + escapeHtml(r.room_num) + '</strong></td>' +
+                        '<td><span class="badge bg-primary">' + escapeHtml(r.room_type) + '</span></td>' +
+                        '<td>' + escapeHtml(r.floor) + '</td>' +
+                        '<td>' + escapeHtml(r.date_from || '') + '</td>' +
+                        '<td>' + escapeHtml(r.date_to || '') + '</td>';
+                    frag.appendChild(tr);
+                });
+                tbody.innerHTML = '';
+                tbody.appendChild(frag);
+
+                statusEl.textContent = 'تم العثور على ' + autoFillPreviewRows.length + ' غرفة';
+                btnApply.disabled = false;
+            })
+            .catch(err => {
+                statusEl.textContent = '';
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-danger py-3">تعذر الاتصال بالخادم</td></tr>';
+                console.error(err);
+            });
+    });
+
+    btnApply.addEventListener('click', () => {
+        if (!autoFillPreviewRows.length || !els.roomsInput) return;
+
+        const lines = autoFillPreviewRows.map(r => String(r.room_num) + '\t' + String(r.room_type));
+        const newText = lines.join('\n');
+
+        const current = els.roomsInput.value.trim();
+        if (current) {
+            if (!confirm('سيتم استبدال محتوى حقل الغرف الحالي. هل تريد المتابعة؟')) return;
+        }
+        els.roomsInput.value = newText;
+        els.roomsInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+        bsModal.hide();
+        showToast('تم تعبئة ' + autoFillPreviewRows.length + ' غرفة', 'success');
+    });
+}
+
+function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = (s === null || s === undefined) ? '' : String(s);
+    return d.innerHTML;
+}
+
+// ============================================================================
 // Init
 // ============================================================================
 
@@ -1081,4 +1216,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     updateCounters();
     updateRoomsStats();
+
+    initAutoFillRoomsModal();
 });
