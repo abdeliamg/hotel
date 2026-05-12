@@ -601,12 +601,7 @@ require_once __DIR__ . '/../includes/root_nav.php';
     <?php render_root_navbar('distribute'); ?>
 </div>
 
-<header class="page-header">
-    <div class="container d-flex flex-wrap justify-content-between align-items-center gap-2">
-        <h1><i class="bi bi-grid-3x3-gap-fill"></i> توزيع غرف الفندق</h1>
-        <a class="header-link" href="/med_hotels.php"><i class="bi bi-house-door"></i> الرئيسية</a>
-    </div>
-</header>
+
 
 <div class="container">
 
