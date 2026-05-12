@@ -565,9 +565,16 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
     ];
 
     // Base FROM/JOIN
+    // NOTE: room is keyed by (hotel_name, floor, room_num); joining without floor
+    // duplicates res rows when the same room_num exists on multiple floors or has
+    // multiple availability windows. Same care for the group join — pick one row.
     $baseFrom = ' FROM res
-        LEFT JOIN "group" AS g ON g."group" = res.group_name
-        LEFT JOIN room AS r ON r.hotel_name = res.hotel_name AND r.room_num = res.room_num ';
+        LEFT JOIN "group" AS g
+               ON g.master_group = res.group_name
+        LEFT JOIN room AS r
+               ON r.hotel_name = res.hotel_name
+              AND r.floor      = res.floor
+              AND r.room_num   = res.room_num ';
 
     // Total records (without filtering)
     $totalSql = 'SELECT COUNT(*) AS cnt FROM res';
@@ -617,18 +624,20 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
     }
 
     // Data query
+    // GROUP BY res.id is a defensive de-duplication in case any LEFT JOIN still
+    // matches multiple rows (e.g. multiple availability windows for the same room).
     $dataSql = 'SELECT
             res.id    AS res_id,
             res.hotel_name,
             res.floor,
             res.room_num,
-            r.room_type,
+            MIN(r.room_type)    AS room_type,
             res.group_name,
-            g.master_group,
+            MIN(g.master_group) AS master_group,
             res.start_date,
             res.end_date,
             res.note ' .
-        $baseFrom . $where . $orderClause . $limitClause;
+        $baseFrom . $where . ' GROUP BY res.id ' . $orderClause . $limitClause;
 
     $stmt = $pdo->prepare($dataSql);
     foreach ($params as $k => $v) {
@@ -907,19 +916,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
         <?php render_root_navbar('reservations'); ?>
     </div>
 
-    <!-- Navbar -->
-    <nav class="navbar">
-        <div class="container-fluid">
-            <a class="navbar-brand" href="#">
-                <i class="bi bi-calendar-check"></i>
-                نظام إدارة الحجوزات
-            </a>
-            <a href="med_hotels.php" class="back-btn">
-                <i class="bi bi-arrow-right"></i>
-                العودة للرئيسية
-            </a>
-        </div>
-    </nav>
+  
 
     <div class="main-container">
         <!-- Page Header -->
