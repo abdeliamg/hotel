@@ -1,0 +1,6 @@
+# SQLite databases — do not commit production data
+*.db
+**/*.db
+
+# GitHub webhook local secret (never commit)
+webhook_secret.local.php

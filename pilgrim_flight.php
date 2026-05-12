@@ -426,7 +426,8 @@ $today = date('Y-m-d');
                 </button>
             </div>
             <form id="departureForm" class="collapse mt-4">
-                <div class="row g-3">
+            <!-- single pilgrim  
+            <div class="row g-3">
                     <div class="col-md-4">
                         <label for="departedDate" class="form-label">تاريخ الترحيل</label>
                         <input type="date" class="form-control" id="departedDate" value="<?= pf_e($today) ?>" required>
@@ -442,7 +443,7 @@ $today = date('Y-m-d');
                 </div>
 
                 <hr>
-
+  
                 <div class="row g-3 align-items-end">
                     <div class="col-md-8">
                         <label for="groupSelect" class="form-label">اختيار مجموعة كاملة</label>
@@ -456,7 +457,7 @@ $today = date('Y-m-d');
                 </div>
 
                 <hr>
-
+--> 
                 <div class="row g-3 align-items-end">
                     <div class="col-md-4">
                         <label for="hotelSelect" class="form-label">الفندق</label>

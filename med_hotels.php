@@ -360,15 +360,7 @@ require_once __DIR__ . '/includes/root_nav.php';
         <?php render_root_navbar('home'); ?>
     </div>
 
-    <!-- Navbar -->
-    <nav class="navbar navbar-expand-lg">
-        <div class="container">
-            <a class="navbar-brand" href="#">
-                <i class="bi bi-building"></i>
-                نظام إدارة الفنادق المتطور
-            </a>
-        </div>
-    </nav>
+    
 
     <!-- Main Container -->
     <div class="main-container">
