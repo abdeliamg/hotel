@@ -1032,6 +1032,37 @@ function toggleRoomsStats(forceState) {
     if (show) updateRoomsStats();
 }
 
+function enableTabInsertion(textarea) {
+    if (!textarea) return;
+    textarea.addEventListener('keydown', (e) => {
+        if (e.key !== 'Tab' || e.ctrlKey || e.altKey || e.metaKey) return;
+        e.preventDefault();
+
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const value = textarea.value;
+
+        if (e.shiftKey) {
+            // Shift+Tab: remove a leading tab from the current line(s) if present.
+            const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+            if (value[lineStart] === '\t') {
+                textarea.value = value.slice(0, lineStart) + value.slice(lineStart + 1);
+                const newStart = Math.max(lineStart, start - 1);
+                const newEnd = Math.max(lineStart, end - 1);
+                textarea.selectionStart = newStart;
+                textarea.selectionEnd = newEnd;
+                textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            return;
+        }
+
+        // Insert a tab character at the caret (replacing any selection).
+        textarea.value = value.slice(0, start) + '\t' + value.slice(end);
+        textarea.selectionStart = textarea.selectionEnd = start + 1;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+}
+
 function debounce(fn, wait) {
     let t = null;
     return function () {
@@ -1405,6 +1436,9 @@ document.addEventListener('DOMContentLoaded', () => {
         debouncedRoomsStats();
     });
     els.groupsInput.addEventListener('input', debouncedCounters);
+
+    enableTabInsertion(els.roomsInput);
+    enableTabInsertion(els.groupsInput);
 
     if (els.btnToggleRoomsStats) {
         els.btnToggleRoomsStats.addEventListener('click', () => toggleRoomsStats());
