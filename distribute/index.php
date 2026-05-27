@@ -384,6 +384,116 @@ require_once __DIR__ . '/../includes/root_nav.php';
 
         .settings-body .form-check-label { font-size: 13px; }
 
+        .fallback-rules {
+            margin-top: 14px;
+            padding-top: 14px;
+            border-top: 1px dashed var(--border);
+        }
+
+        .fallback-rules .fr-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+
+        .fallback-rules .fr-head h6 {
+            margin: 0;
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--accent);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .fallback-rules .fr-head h6 i { color: var(--primary); }
+
+        .fallback-rules .fr-head .fr-hint {
+            font-size: 12px;
+            color: var(--muted);
+            flex: 1 1 100%;
+        }
+
+        .fallback-rules .fr-actions {
+            margin-inline-start: auto;
+            display: flex;
+            gap: 6px;
+        }
+
+        .fallback-rules .fr-actions .btn { font-size: 12px; padding: 4px 10px; }
+
+        .fr-list { display: flex; flex-direction: column; gap: 6px; }
+
+        .fr-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            background: #f8fafc;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 6px 10px;
+        }
+
+        .fr-row .fr-from-wrap,
+        .fr-row .fr-to-wrap { display: flex; align-items: center; gap: 6px; }
+
+        .fr-row .fr-from-wrap { flex-shrink: 0; }
+
+        .fr-row .fr-to-wrap { flex: 1; min-width: 200px; }
+
+        .fr-row label {
+            font-size: 12px;
+            color: var(--muted);
+            margin: 0;
+            white-space: nowrap;
+        }
+
+        .fr-row input[type="number"] {
+            width: 70px;
+            padding: 4px 8px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        .fr-row input[type="text"] {
+            flex: 1;
+            padding: 4px 8px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+            font-family: 'Consolas', monospace;
+            min-width: 0;
+        }
+
+        .fr-row .fr-arrow { color: var(--muted); font-size: 14px; }
+
+        .fr-row .fr-del {
+            background: transparent;
+            border: 1px solid #fecaca;
+            color: var(--danger);
+            border-radius: 6px;
+            padding: 3px 8px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .fr-row .fr-del:hover { background: #fee2e2; }
+
+        .fr-empty {
+            text-align: center;
+            color: var(--muted);
+            font-size: 12px;
+            padding: 12px;
+            background: #f8fafc;
+            border: 1px dashed var(--border);
+            border-radius: 8px;
+        }
+
         .results-grid {
             display: grid;
             grid-template-columns: 1.5fr 1fr;
@@ -680,6 +790,25 @@ require_once __DIR__ . '/../includes/root_nav.php';
                         <label class="form-check-label" for="setAllowUpgrade">السماح بترقية النوع (إسناد غرف أكبر عند نفاد النوع المطلوب)</label>
                     </div>
                 </div>
+            </div>
+
+            <div class="fallback-rules" id="fallbackRules">
+                <div class="fr-head">
+                    <h6><i class="bi bi-arrow-left-right"></i> قواعد البدائل بين أنواع الغرف</h6>
+                    <div class="fr-actions">
+                        <button type="button" class="btn btn-outline-primary btn-sm" id="btnAddFallbackRule">
+                            <i class="bi bi-plus-lg"></i> إضافة قاعدة
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" id="btnResetFallbackRules">
+                            <i class="bi bi-arrow-counterclockwise"></i> الافتراضي
+                        </button>
+                    </div>
+                    <div class="fr-hint">
+                        حدّد لكل نوع غرفة الأنواع البديلة المسموح أخذها عند نفاد النوع المطلوب (تفصل بفاصلة، مثال: <code>3, 4, 5</code>).
+                        يتطلب تفعيل خيار "السماح بترقية النوع" أعلاه. يتم حفظ التغييرات تلقائيًا في المتصفح.
+                    </div>
+                </div>
+                <div class="fr-list" id="fallbackRulesList"></div>
             </div>
         </div>
     </div>

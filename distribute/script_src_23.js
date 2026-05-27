@@ -36,6 +36,57 @@ const DEFAULT_SETTINGS = {
     allowTypeUpgrade: false,
 };
 
+// Default type-fallback rules: each requested type can fall back to any larger
+// type (up to 8). Mirrors the original hard-coded "upgrade to any bigger type"
+// behaviour, but is now editable by the user.
+const DEFAULT_FALLBACK_RULES = [
+    { from: 1, to: [2, 3, 4, 5, 6, 7, 8] },
+    { from: 2, to: [3, 4, 5, 6, 7, 8] },
+    { from: 3, to: [4, 5, 6, 7, 8] },
+    { from: 4, to: [5, 6, 7, 8] },
+    { from: 5, to: [6, 7, 8] },
+    { from: 6, to: [7, 8] },
+    { from: 7, to: [8] },
+];
+
+const FALLBACK_RULES_STORAGE_KEY = 'distribute:typeFallbackRules:v1';
+
+let fallbackRulesCache = null;
+
+function cloneDefaultFallbackRules() {
+    return DEFAULT_FALLBACK_RULES.map(r => ({ from: r.from, to: r.to.slice() }));
+}
+
+function loadFallbackRules() {
+    if (fallbackRulesCache) return fallbackRulesCache;
+    try {
+        const raw = localStorage.getItem(FALLBACK_RULES_STORAGE_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+                fallbackRulesCache = parsed
+                    .map(r => ({
+                        from: parseInt(r.from, 10),
+                        to: Array.isArray(r.to)
+                            ? r.to.map(x => parseInt(x, 10)).filter(x => Number.isFinite(x) && x > 0)
+                            : [],
+                    }))
+                    .filter(r => Number.isFinite(r.from) && r.from > 0);
+                return fallbackRulesCache;
+            }
+        }
+    } catch (e) { /* ignore corrupt storage */ }
+    fallbackRulesCache = cloneDefaultFallbackRules();
+    return fallbackRulesCache;
+}
+
+function saveFallbackRules(rules) {
+    fallbackRulesCache = rules;
+    try {
+        localStorage.setItem(FALLBACK_RULES_STORAGE_KEY, JSON.stringify(rules));
+    } catch (e) { /* storage full / disabled - silently ignore */ }
+}
+
 function readSettings() {
     return {
         groupOrder: els.setGroupOrder?.value || DEFAULT_SETTINGS.groupOrder,
@@ -43,6 +94,7 @@ function readSettings() {
         multiFloorPref: els.setMultiFloorPref?.value || DEFAULT_SETTINGS.multiFloorPref,
         noSplit: !!els.setNoSplit?.checked,
         allowTypeUpgrade: !!els.setAllowUpgrade?.checked,
+        fallbackRules: loadFallbackRules(),
     };
 }
 
@@ -134,11 +186,21 @@ function groupRoomsByFloor(rooms) {
     return m;
 }
 
-function getUpgradeTypesAsc(roomsByType, minType, allowUpgrade) {
+function getUpgradeTypesAsc(roomsByType, minType, allowUpgrade, fallbackRules) {
     if (!allowUpgrade) return [minType];
-    const types = [...roomsByType.keys()].filter(t => t >= minType).sort((a, b) => a - b);
-    if (!types.includes(minType)) types.unshift(minType);
-    return types;
+
+    const rules = Array.isArray(fallbackRules) ? fallbackRules : loadFallbackRules();
+    const rule = rules.find(r => r.from === minType);
+
+    const result = [minType];
+    if (!rule) return result;
+
+    const allowed = [...new Set(rule.to)]
+        .filter(t => t !== minType && roomsByType.has(t))
+        .sort((a, b) => a - b);
+
+    for (const t of allowed) result.push(t);
+    return result;
 }
 
 // ============================================================================
@@ -344,7 +406,7 @@ function attemptMultiFloorPartial(group, ctx, settings) {
 }
 
 function tryPlaceSingleFloor(group, ctx, settings) {
-    const types = getUpgradeTypesAsc(ctx.roomsByType, group.type, settings.allowTypeUpgrade);
+    const types = getUpgradeTypesAsc(ctx.roomsByType, group.type, settings.allowTypeUpgrade, settings.fallbackRules);
     for (const t of types) {
         const res = attemptSingleFloorOnType(group, t, ctx, settings);
         if (res) { commitAssignment(group, res, 'success', ctx); return true; }
@@ -355,7 +417,7 @@ function tryPlaceSingleFloor(group, ctx, settings) {
 function tryPlaceMultiFloor(group, ctx, settings) {
     if (settings.noSplit) { commitFailed(group, ctx); return; }
 
-    const types = getUpgradeTypesAsc(ctx.roomsByType, group.type, settings.allowTypeUpgrade);
+    const types = getUpgradeTypesAsc(ctx.roomsByType, group.type, settings.allowTypeUpgrade, settings.fallbackRules);
 
     for (const t of types) {
         const res = attemptMultiFloorFull(group, t, ctx, settings);
@@ -1138,6 +1200,144 @@ function escapeHtml(s) {
 }
 
 // ============================================================================
+// Fallback rules repeater UI
+// ============================================================================
+
+function renderFallbackRules() {
+    const list = els.fallbackRulesList;
+    if (!list) return;
+
+    const rules = loadFallbackRules();
+    list.innerHTML = '';
+
+    if (rules.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'fr-empty';
+        empty.textContent = 'لا توجد قواعد. اضغط "إضافة قاعدة" لبدء التخصيص أو "الافتراضي" لاستعادة القيم الأصلية.';
+        list.appendChild(empty);
+        return;
+    }
+
+    const frag = document.createDocumentFragment();
+    rules.forEach((rule, idx) => {
+        const row = document.createElement('div');
+        row.className = 'fr-row';
+        row.dataset.index = String(idx);
+
+        const fromWrap = document.createElement('div');
+        fromWrap.className = 'fr-from-wrap';
+        const fromLabel = document.createElement('label');
+        fromLabel.textContent = 'النوع المطلوب';
+        const fromInput = document.createElement('input');
+        fromInput.type = 'number';
+        fromInput.min = '1';
+        fromInput.step = '1';
+        fromInput.value = String(rule.from);
+        fromInput.dataset.field = 'from';
+        fromWrap.appendChild(fromLabel);
+        fromWrap.appendChild(fromInput);
+
+        const arrow = document.createElement('span');
+        arrow.className = 'fr-arrow';
+        arrow.innerHTML = '<i class="bi bi-arrow-left"></i>';
+
+        const toWrap = document.createElement('div');
+        toWrap.className = 'fr-to-wrap';
+        const toLabel = document.createElement('label');
+        toLabel.textContent = 'بدائل';
+        const toInput = document.createElement('input');
+        toInput.type = 'text';
+        toInput.value = rule.to.join(', ');
+        toInput.dataset.field = 'to';
+        toInput.placeholder = 'مثال: 3, 4, 5';
+        toWrap.appendChild(toLabel);
+        toWrap.appendChild(toInput);
+
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'fr-del';
+        del.dataset.action = 'delete';
+        del.innerHTML = '<i class="bi bi-trash"></i>';
+        del.title = 'حذف';
+
+        row.appendChild(fromWrap);
+        row.appendChild(arrow);
+        row.appendChild(toWrap);
+        row.appendChild(del);
+        frag.appendChild(row);
+    });
+    list.appendChild(frag);
+}
+
+function collectFallbackRulesFromDOM() {
+    const list = els.fallbackRulesList;
+    if (!list) return loadFallbackRules();
+    const rows = list.querySelectorAll('.fr-row');
+    const rules = [];
+    rows.forEach(row => {
+        const fromVal = parseInt(row.querySelector('input[data-field="from"]').value, 10);
+        const toRaw = row.querySelector('input[data-field="to"]').value || '';
+        if (!Number.isFinite(fromVal) || fromVal <= 0) return;
+        const to = toRaw
+            .split(/[\s,;]+/)
+            .map(x => parseInt(x, 10))
+            .filter(x => Number.isFinite(x) && x > 0 && x !== fromVal);
+        rules.push({ from: fromVal, to: [...new Set(to)] });
+    });
+    return rules;
+}
+
+function persistFallbackRulesFromDOM() {
+    const rules = collectFallbackRulesFromDOM();
+    saveFallbackRules(rules);
+}
+
+function initFallbackRulesUI() {
+    const list = els.fallbackRulesList;
+    if (!list) return;
+
+    renderFallbackRules();
+
+    list.addEventListener('input', (e) => {
+        const target = e.target;
+        if (target && (target.matches('input[data-field="from"]') || target.matches('input[data-field="to"]'))) {
+            persistFallbackRulesFromDOM();
+        }
+    });
+
+    list.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-action="delete"]');
+        if (!btn) return;
+        const row = btn.closest('.fr-row');
+        if (!row) return;
+        row.remove();
+        persistFallbackRulesFromDOM();
+        if (list.querySelectorAll('.fr-row').length === 0) renderFallbackRules();
+    });
+
+    if (els.btnAddFallbackRule) {
+        els.btnAddFallbackRule.addEventListener('click', () => {
+            const rules = collectFallbackRulesFromDOM();
+            const used = new Set(rules.map(r => r.from));
+            let nextFrom = 2;
+            while (used.has(nextFrom)) nextFrom++;
+            rules.push({ from: nextFrom, to: [] });
+            saveFallbackRules(rules);
+            renderFallbackRules();
+        });
+    }
+
+    if (els.btnResetFallbackRules) {
+        els.btnResetFallbackRules.addEventListener('click', () => {
+            if (!confirm('سيتم استعادة قواعد البدائل الافتراضية. هل تريد المتابعة؟')) return;
+            saveFallbackRules(cloneDefaultFallbackRules());
+            renderFallbackRules();
+            showToast('تم استعادة القواعد الافتراضية', 'info');
+        });
+    }
+}
+
+// ============================================================================
 // Init
 // ============================================================================
 
@@ -1172,6 +1372,10 @@ document.addEventListener('DOMContentLoaded', () => {
     els.setMultiFloorPref = document.getElementById('setMultiFloorPref');
     els.setNoSplit = document.getElementById('setNoSplit');
     els.setAllowUpgrade = document.getElementById('setAllowUpgrade');
+
+    els.fallbackRulesList = document.getElementById('fallbackRulesList');
+    els.btnAddFallbackRule = document.getElementById('btnAddFallbackRule');
+    els.btnResetFallbackRules = document.getElementById('btnResetFallbackRules');
 
     if (els.setGroupOrder) els.setGroupOrder.value = DEFAULT_SETTINGS.groupOrder;
     if (els.setSingleFloorPref) els.setSingleFloorPref.value = DEFAULT_SETTINGS.singleFloorPref;
@@ -1217,5 +1421,6 @@ document.addEventListener('DOMContentLoaded', () => {
     updateCounters();
     updateRoomsStats();
 
+    initFallbackRulesUI();
     initAutoFillRoomsModal();
 });
