@@ -36,42 +36,94 @@ const DEFAULT_SETTINGS = {
     allowTypeUpgrade: false,
 };
 
-// Default type-fallback rules: each requested type can fall back to any larger
-// type (up to 8). Mirrors the original hard-coded "upgrade to any bigger type"
-// behaviour, but is now editable by the user.
-const DEFAULT_FALLBACK_RULES = [
-    { from: 1, to: [2, 3, 4, 5, 6, 7, 8] },
-    { from: 2, to: [3, 4, 5, 6, 7, 8] },
-    { from: 3, to: [4, 5, 6, 7, 8] },
-    { from: 4, to: [5, 6, 7, 8] },
-    { from: 5, to: [6, 7, 8] },
-    { from: 6, to: [7, 8] },
-    { from: 7, to: [8] },
-];
+// Default type-fallback rules. Each rule says: "1 demand unit of `from` can be
+// satisfied by one of these bundles", where a bundle is `count` rooms of `type`.
+// The primary bundle (1 room of `from`) is always implicit and tried first.
+// Defaults mirror the original "any larger type with 1 room" upgrade behaviour;
+// the user can add multi-room replacements (e.g. 2 rooms of type-2 for 1
+// type-4 demand) via the UI.
+const DEFAULT_FALLBACK_RULES = (function () {
+    const rules = [];
+    for (let from = 1; from <= 7; from++) {
+        const to = [];
+        for (let t = from + 1; t <= 8; t++) to.push({ type: t, count: 1 });
+        rules.push({ from, to });
+    }
+    return rules;
+})();
 
-const FALLBACK_RULES_STORAGE_KEY = 'distribute:typeFallbackRules:v1';
+const FALLBACK_RULES_STORAGE_KEY_V1 = 'distribute:typeFallbackRules:v1';
+const FALLBACK_RULES_STORAGE_KEY = 'distribute:typeFallbackRules:v2';
 
 let fallbackRulesCache = null;
 
 function cloneDefaultFallbackRules() {
-    return DEFAULT_FALLBACK_RULES.map(r => ({ from: r.from, to: r.to.slice() }));
+    return DEFAULT_FALLBACK_RULES.map(r => ({
+        from: r.from,
+        to: r.to.map(b => ({ type: b.type, count: b.count })),
+    }));
+}
+
+function normalizeRules(arr) {
+    if (!Array.isArray(arr)) return [];
+    return arr
+        .map(r => {
+            const from = parseInt(r.from, 10);
+            if (!Number.isFinite(from) || from <= 0) return null;
+            const to = [];
+            if (Array.isArray(r.to)) {
+                for (const item of r.to) {
+                    // Accept both old (number) and new ({type,count}) formats.
+                    let type, count;
+                    if (typeof item === 'number' || typeof item === 'string') {
+                        type = parseInt(item, 10);
+                        count = 1;
+                    } else if (item && typeof item === 'object') {
+                        type = parseInt(item.type, 10);
+                        count = parseInt(item.count, 10);
+                        if (!Number.isFinite(count) || count <= 0) count = 1;
+                    } else {
+                        continue;
+                    }
+                    if (!Number.isFinite(type) || type <= 0) continue;
+                    // Drop trivially redundant primary bundle (always implicit).
+                    if (type === from && count === 1) continue;
+                    to.push({ type, count });
+                }
+            }
+            // Dedupe by (type,count)
+            const seen = new Set();
+            const dedup = [];
+            for (const b of to) {
+                const key = b.type + ':' + b.count;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                dedup.push(b);
+            }
+            return { from, to: dedup };
+        })
+        .filter(Boolean);
 }
 
 function loadFallbackRules() {
     if (fallbackRulesCache) return fallbackRulesCache;
     try {
-        const raw = localStorage.getItem(FALLBACK_RULES_STORAGE_KEY);
-        if (raw) {
-            const parsed = JSON.parse(raw);
+        const rawV2 = localStorage.getItem(FALLBACK_RULES_STORAGE_KEY);
+        if (rawV2) {
+            const parsed = JSON.parse(rawV2);
             if (Array.isArray(parsed)) {
-                fallbackRulesCache = parsed
-                    .map(r => ({
-                        from: parseInt(r.from, 10),
-                        to: Array.isArray(r.to)
-                            ? r.to.map(x => parseInt(x, 10)).filter(x => Number.isFinite(x) && x > 0)
-                            : [],
-                    }))
-                    .filter(r => Number.isFinite(r.from) && r.from > 0);
+                fallbackRulesCache = normalizeRules(parsed);
+                return fallbackRulesCache;
+            }
+        }
+        // Migrate from v1 (numbers only) if present.
+        const rawV1 = localStorage.getItem(FALLBACK_RULES_STORAGE_KEY_V1);
+        if (rawV1) {
+            const parsed = JSON.parse(rawV1);
+            if (Array.isArray(parsed)) {
+                const migrated = normalizeRules(parsed);
+                fallbackRulesCache = migrated;
+                try { localStorage.setItem(FALLBACK_RULES_STORAGE_KEY, JSON.stringify(migrated)); } catch (e) {}
                 return fallbackRulesCache;
             }
         }
@@ -81,9 +133,10 @@ function loadFallbackRules() {
 }
 
 function saveFallbackRules(rules) {
-    fallbackRulesCache = rules;
+    const normalized = normalizeRules(rules);
+    fallbackRulesCache = normalized;
     try {
-        localStorage.setItem(FALLBACK_RULES_STORAGE_KEY, JSON.stringify(rules));
+        localStorage.setItem(FALLBACK_RULES_STORAGE_KEY, JSON.stringify(normalized));
     } catch (e) { /* storage full / disabled - silently ignore */ }
 }
 
@@ -169,38 +222,29 @@ function indexByType(rooms) {
     return m;
 }
 
-function freeRoomsOfType(roomsByType, type) {
-    const pool = roomsByType.get(type) || [];
-    const out = [];
-    for (const r of pool) if (!r.assigned) out.push(r);
-    return out;
-}
+// Returns the ordered list of bundles a group may use to satisfy one demand
+// unit. The first bundle is always the primary (1 room of the requested type);
+// further bundles come from the user's fallback rules in the order specified.
+function buildBundles(group, settings) {
+    const primary = { type: group.type, count: 1, primary: true };
+    if (!settings.allowTypeUpgrade) return [primary];
 
-function groupRoomsByFloor(rooms) {
-    const m = new Map();
-    for (const r of rooms) {
-        let arr = m.get(r.floor);
-        if (!arr) { arr = []; m.set(r.floor, arr); }
-        arr.push(r);
+    const rules = Array.isArray(settings.fallbackRules) ? settings.fallbackRules : loadFallbackRules();
+    const rule = rules.find(r => r.from === group.type);
+    if (!rule || !Array.isArray(rule.to) || rule.to.length === 0) return [primary];
+
+    const out = [primary];
+    const seen = new Set([group.type + ':1']);
+    for (const b of rule.to) {
+        const type = parseInt(b.type, 10);
+        const count = parseInt(b.count, 10) || 1;
+        if (!Number.isFinite(type) || type <= 0 || count <= 0) continue;
+        const key = type + ':' + count;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ type, count, primary: false });
     }
-    return m;
-}
-
-function getUpgradeTypesAsc(roomsByType, minType, allowUpgrade, fallbackRules) {
-    if (!allowUpgrade) return [minType];
-
-    const rules = Array.isArray(fallbackRules) ? fallbackRules : loadFallbackRules();
-    const rule = rules.find(r => r.from === minType);
-
-    const result = [minType];
-    if (!rule) return result;
-
-    const allowed = [...new Set(rule.to)]
-        .filter(t => t !== minType && roomsByType.has(t))
-        .sort((a, b) => a - b);
-
-    for (const t of allowed) result.push(t);
-    return result;
+    return out;
 }
 
 // ============================================================================
@@ -230,97 +274,6 @@ function pickContiguousFromFloor(rooms, n) {
 
     const startIdx = Math.min(bestStart, Math.max(0, sorted.length - n));
     return sorted.slice(startIdx, startIdx + n);
-}
-
-// ============================================================================
-// Phase 1.B - single-floor selection (configurable preference)
-// ============================================================================
-
-function chooseSingleFloor(byFloor, need, pref, masterGroupFloors) {
-    const candidates = [];
-    for (const [f, rooms] of byFloor.entries()) {
-        if (rooms.length >= need) candidates.push([f, rooms]);
-    }
-    if (candidates.length === 0) return null;
-
-    const tightest = (a, b) => (a[1].length - b[1].length) || (a[0] - b[0]);
-    const lowest = (a, b) => a[0] - b[0];
-
-    if (pref === 'lowestAccessible') {
-        candidates.sort(lowest);
-    } else if (pref === 'masterGroupCohesive' && masterGroupFloors && masterGroupFloors.size > 0) {
-        candidates.sort((a, b) => {
-            const ao = masterGroupFloors.has(a[0]) ? 0 : 1;
-            const bo = masterGroupFloors.has(b[0]) ? 0 : 1;
-            if (ao !== bo) return ao - bo;
-            return tightest(a, b);
-        });
-    } else {
-        candidates.sort(tightest);
-    }
-    return candidates[0][0];
-}
-
-// ============================================================================
-// Phase 1.D - smallest contiguous floor window for multi-floor placement
-// ============================================================================
-
-function findContiguousFloorWindow(byFloor, need, masterGroupFloors) {
-    const floors = [...byFloor.keys()].sort((a, b) => a - b);
-    if (floors.length === 0) return null;
-
-    let best = null;
-    for (let i = 0; i < floors.length; i++) {
-        let total = 0;
-        let overlap = 0;
-        for (let j = i; j < floors.length; j++) {
-            if (j > i && floors[j] !== floors[j - 1] + 1) break;
-            total += byFloor.get(floors[j]).length;
-            if (masterGroupFloors && masterGroupFloors.has(floors[j])) overlap++;
-            if (total >= need) {
-                const span = floors[j] - floors[i] + 1;
-                const better =
-                    best === null ||
-                    span < best.span ||
-                    (span === best.span && overlap > best.overlap) ||
-                    (span === best.span && overlap === best.overlap && floors[i] < best.startFloor);
-                if (better) {
-                    best = {
-                        span,
-                        overlap,
-                        startFloor: floors[i],
-                        windowFloors: floors.slice(i, j + 1),
-                    };
-                }
-                break;
-            }
-        }
-    }
-    return best;
-}
-
-function pickAcrossFloors(byFloor, orderedFloors, need) {
-    const picks = [];
-    let remaining = need;
-    for (const f of orderedFloors) {
-        if (remaining === 0) break;
-        const onFloor = byFloor.get(f) || [];
-        if (onFloor.length === 0) continue;
-        const take = Math.min(remaining, onFloor.length);
-        const fromThisFloor = pickContiguousFromFloor(onFloor, take);
-        for (const r of fromThisFloor) {
-            picks.push(r);
-            remaining--;
-            if (remaining === 0) break;
-        }
-    }
-    return picks;
-}
-
-function sortFloorsLargestFirst(byFloor) {
-    return [...byFloor.entries()]
-        .sort((a, b) => b[1].length - a[1].length || a[0] - b[0])
-        .map(e => e[0]);
 }
 
 // ============================================================================
@@ -363,178 +316,309 @@ function masterGroupFloorsFor(ctx, group) {
     return ctx.floorsByMasterGroup.get(group.masterGroup) || new Set();
 }
 
-function attemptSingleFloorOnType(group, type, ctx, settings) {
-    const free = freeRoomsOfType(ctx.roomsByType, type);
-    if (free.length < group.count) return null;
-    const byFloor = groupRoomsByFloor(free);
-    const mgFloors = masterGroupFloorsFor(ctx, group);
-    const chosen = chooseSingleFloor(byFloor, group.count, settings.singleFloorPref, mgFloors);
-    if (chosen === null) return null;
-    const picked = pickContiguousFromFloor(byFloor.get(chosen), group.count);
-    return { type, picked, multiFloor: false };
-}
-
-function attemptMultiFloorFull(group, type, ctx, settings) {
-    const free = freeRoomsOfType(ctx.roomsByType, type);
-    if (free.length < group.count) return null;
-    const byFloor = groupRoomsByFloor(free);
-    const mgFloors = masterGroupFloorsFor(ctx, group);
-
-    let orderedFloors;
-    if (settings.multiFloorPref === 'adjacent') {
-        const win = findContiguousFloorWindow(byFloor, group.count, mgFloors);
-        orderedFloors = win ? win.windowFloors : sortFloorsLargestFirst(byFloor);
-    } else {
-        orderedFloors = sortFloorsLargestFirst(byFloor);
-    }
-
-    const picks = pickAcrossFloors(byFloor, orderedFloors, group.count);
-    if (picks.length === group.count) return { type, picked: picks, multiFloor: true };
-    return null;
-}
-
-function attemptMultiFloorPartial(group, types, ctx, settings) {
-    const free = freeRoomsOfTypes(ctx.roomsByType, types);
-    if (free.length === 0) return { type: group.type, picked: [], multiFloor: true };
-    const byFloor = groupRoomsByFloor(free);
-    const orderedFloors = settings.multiFloorPref === 'adjacent'
-        ? [...byFloor.keys()].sort((a, b) => a - b)
-        : sortFloorsLargestFirst(byFloor);
-    const picks = pickAcrossFloorsMixed(byFloor, orderedFloors, group.count, group.type);
-    return { type: group.type, picked: picks, multiFloor: true };
-}
-
 // ----------------------------------------------------------------------------
-// Mixed-type fallback attempts: when no single allowed type has enough rooms
-// alone, we pool ALL allowed types together. Picks prefer the requested type
-// first to minimise bed waste, then fall back to upgrade types ascending.
+// Bundle-aware placement
+// ----------------------------------------------------------------------------
+// A "demand unit" is one row in the group's request (group.count units). A
+// "bundle" is the rule { type, count } describing how many rooms of which type
+// are needed to satisfy one unit. The primary bundle (1 room of group.type) is
+// always tried first, so substitutions only happen when the primary fails.
 // ----------------------------------------------------------------------------
 
-function freeRoomsOfTypes(roomsByType, types) {
-    const out = [];
+function freeRoomsByFloorByType(roomsByType, allowedTypes) {
+    // Returns Map<floor, Map<type, Room[]>> containing only free rooms of the
+    // given types. Rooms inside each per-type array are NOT pre-sorted; the
+    // pickContiguousFromFloor helper sorts them on demand.
+    const map = new Map();
     const seen = new Set();
-    for (const t of types) {
+    for (const t of allowedTypes) {
         if (seen.has(t)) continue;
         seen.add(t);
         const pool = roomsByType.get(t);
         if (!pool) continue;
-        for (const r of pool) if (!r.assigned) out.push(r);
+        for (const r of pool) {
+            if (r.assigned) continue;
+            let byT = map.get(r.floor);
+            if (!byT) { byT = new Map(); map.set(r.floor, byT); }
+            let arr = byT.get(t);
+            if (!arr) { arr = []; byT.set(t, arr); }
+            arr.push(r);
+        }
+    }
+    return map;
+}
+
+function clonePoolsForFloors(floorByType, floors) {
+    const out = new Map();
+    for (const f of floors) {
+        const src = floorByType.get(f);
+        if (!src) continue;
+        const inner = new Map();
+        for (const [t, arr] of src.entries()) inner.set(t, arr.slice());
+        out.set(f, inner);
     }
     return out;
 }
 
-function pickRoomsMixedFromFloor(floorRooms, n, requestedType) {
-    const byType = new Map();
-    for (const r of floorRooms) {
-        let arr = byType.get(r.type);
-        if (!arr) { arr = []; byType.set(r.type, arr); }
-        arr.push(r);
+function consumeBundleFromPool(pool, count) {
+    // pool is an array of free rooms (single type). Returns null if pool can't
+    // satisfy `count`, otherwise removes the chosen rooms from pool in-place
+    // and returns them (a contiguous slice preferred).
+    if (!pool || pool.length < count) return null;
+    const sel = pickContiguousFromFloor(pool, count);
+    const selSet = new Set(sel);
+    // Mutate pool to remove selected.
+    let w = 0;
+    for (let i = 0; i < pool.length; i++) {
+        if (!selSet.has(pool[i])) pool[w++] = pool[i];
     }
-    const typesSorted = [...byType.keys()].sort((a, b) => {
-        if (a === requestedType && b !== requestedType) return -1;
-        if (b === requestedType && a !== requestedType) return 1;
-        return a - b;
-    });
-    const result = [];
-    let remaining = n;
-    for (const t of typesSorted) {
-        if (remaining === 0) break;
-        const pool = byType.get(t);
-        const take = Math.min(remaining, pool.length);
-        const picked = pickContiguousFromFloor(pool, take);
-        for (const r of picked) {
-            result.push(r);
-            remaining--;
-            if (remaining === 0) break;
-        }
-    }
-    return result;
+    pool.length = w;
+    return sel;
 }
 
-function pickAcrossFloorsMixed(byFloor, orderedFloors, need, requestedType) {
-    const picks = [];
-    let remaining = need;
+function fillUnitsOnFloor(floorByTypePool, bundles, needUnits) {
+    // Two-pass: first simulate to build a plan of (bundle per unit), then
+    // consume rooms in bulk per type so picks stay contiguous when possible.
+    // floorByTypePool is a Map<type, Room[]> for a single floor (mutated).
+    const remaining = new Map();
+    for (const [t, arr] of floorByTypePool.entries()) remaining.set(t, arr.length);
+
+    const plan = [];
+    for (let u = 0; u < needUnits; u++) {
+        let chosen = null;
+        for (const b of bundles) {
+            if ((remaining.get(b.type) || 0) >= b.count) {
+                remaining.set(b.type, remaining.get(b.type) - b.count);
+                chosen = b;
+                break;
+            }
+        }
+        if (!chosen) break;
+        plan.push(chosen);
+    }
+
+    // Aggregate per type, then bulk-pick contiguous slices.
+    const totalsByType = new Map();
+    for (const b of plan) totalsByType.set(b.type, (totalsByType.get(b.type) || 0) + b.count);
+
+    const picked = [];
+    for (const [t, total] of totalsByType.entries()) {
+        const sel = consumeBundleFromPool(floorByTypePool.get(t), total);
+        if (sel) for (const r of sel) picked.push(r);
+    }
+    return { picked, unitsDone: plan.length };
+}
+
+function fillUnitsAcrossFloors(pools, orderedFloors, bundles, needUnits) {
+    // pools is Map<floor, Map<type, Room[]>> (mutated). Same two-pass approach
+    // as fillUnitsOnFloor, extended to multiple floors: bundles try the first
+    // preferred floor with stock; same-floor same-type picks are batched.
+    const remaining = new Map(); // floor -> Map<type, count>
     for (const f of orderedFloors) {
-        if (remaining === 0) break;
-        const onFloor = byFloor.get(f) || [];
-        if (onFloor.length === 0) continue;
-        const take = Math.min(remaining, onFloor.length);
-        const fromThis = pickRoomsMixedFromFloor(onFloor, take, requestedType);
-        for (const r of fromThis) {
-            picks.push(r);
-            remaining--;
-            if (remaining === 0) break;
+        const byT = pools.get(f);
+        if (!byT) continue;
+        const c = new Map();
+        for (const [t, arr] of byT.entries()) c.set(t, arr.length);
+        remaining.set(f, c);
+    }
+
+    const plan = []; // Array of { floor, bundle }
+    for (let u = 0; u < needUnits; u++) {
+        let chosen = null;
+        for (const b of bundles) {
+            for (const f of orderedFloors) {
+                const c = remaining.get(f);
+                if (!c) continue;
+                if ((c.get(b.type) || 0) >= b.count) {
+                    c.set(b.type, c.get(b.type) - b.count);
+                    chosen = { floor: f, bundle: b };
+                    break;
+                }
+            }
+            if (chosen) break;
+        }
+        if (!chosen) break;
+        plan.push(chosen);
+    }
+
+    // Aggregate per (floor, type), then bulk-pick.
+    const aggregated = new Map();
+    for (const p of plan) {
+        let agg = aggregated.get(p.floor);
+        if (!agg) { agg = new Map(); aggregated.set(p.floor, agg); }
+        agg.set(p.bundle.type, (agg.get(p.bundle.type) || 0) + p.bundle.count);
+    }
+
+    const picked = [];
+    for (const [f, agg] of aggregated.entries()) {
+        const byT = pools.get(f);
+        if (!byT) continue;
+        for (const [t, total] of agg.entries()) {
+            const sel = consumeBundleFromPool(byT.get(t), total);
+            if (sel) for (const r of sel) picked.push(r);
         }
     }
-    return picks;
+    return { picked, unitsDone: plan.length };
 }
 
-function attemptSingleFloorMixed(group, types, ctx, settings) {
-    const free = freeRoomsOfTypes(ctx.roomsByType, types);
-    if (free.length < group.count) return null;
-    const byFloor = groupRoomsByFloor(free);
-    const mgFloors = masterGroupFloorsFor(ctx, group);
-    const chosen = chooseSingleFloor(byFloor, group.count, settings.singleFloorPref, mgFloors);
-    if (chosen === null) return null;
-    const picked = pickRoomsMixedFromFloor(byFloor.get(chosen), group.count, group.type);
-    if (picked.length < group.count) return null;
-    return { type: group.type, picked, multiFloor: false };
+function totalRoomsOnFloor(floorByTypePool) {
+    let n = 0;
+    for (const arr of floorByTypePool.values()) n += arr.length;
+    return n;
 }
 
-function attemptMultiFloorMixed(group, types, ctx, settings) {
-    const free = freeRoomsOfTypes(ctx.roomsByType, types);
-    if (free.length < group.count) return null;
-    const byFloor = groupRoomsByFloor(free);
+function sortFloorsByCapacityDesc(floorByType) {
+    return [...floorByType.entries()]
+        .map(([f, byT]) => [f, totalRoomsOnFloor(byT)])
+        .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+        .map(e => e[0]);
+}
+
+function findContiguousFloorWindowForBundles(floorByType, bundles, need, masterGroupFloors) {
+    // Smallest contiguous window of floors that can satisfy `need` demand
+    // units using `bundles`. Ties broken by master-group overlap, then floor.
+    const floors = [...floorByType.keys()].sort((a, b) => a - b);
+    if (floors.length === 0) return null;
+
+    let best = null;
+    for (let i = 0; i < floors.length; i++) {
+        for (let j = i; j < floors.length; j++) {
+            if (j > i && floors[j] !== floors[j - 1] + 1) break;
+            const windowFloors = floors.slice(i, j + 1);
+            const pools = clonePoolsForFloors(floorByType, windowFloors);
+            const { unitsDone } = fillUnitsAcrossFloors(pools, windowFloors, bundles, need);
+            if (unitsDone >= need) {
+                const span = floors[j] - floors[i] + 1;
+                let overlap = 0;
+                if (masterGroupFloors) {
+                    for (const f of windowFloors) if (masterGroupFloors.has(f)) overlap++;
+                }
+                const better = best === null
+                    || span < best.span
+                    || (span === best.span && overlap > best.overlap)
+                    || (span === best.span && overlap === best.overlap && floors[i] < best.startFloor);
+                if (better) best = { span, overlap, startFloor: floors[i], windowFloors };
+                break;
+            }
+        }
+    }
+    return best;
+}
+
+function attemptSingleFloorBundles(group, bundles, ctx, settings) {
+    const allowedTypes = [...new Set(bundles.map(b => b.type))];
+    const floorByType = freeRoomsByFloorByType(ctx.roomsByType, allowedTypes);
+    if (floorByType.size === 0) return null;
+
+    // Probe each floor to find ones with full capacity for this group.
+    const candidates = [];
+    for (const [floor, byT] of floorByType.entries()) {
+        const probe = clonePoolsForFloors(floorByType, [floor]).get(floor);
+        const { unitsDone } = fillUnitsOnFloor(probe, bundles, group.count);
+        if (unitsDone >= group.count) {
+            candidates.push({ floor, totalRooms: totalRoomsOnFloor(byT) });
+        }
+    }
+    if (candidates.length === 0) return null;
+
+    const tightest = (a, b) => (a.totalRooms - b.totalRooms) || (a.floor - b.floor);
+    const lowest = (a, b) => a.floor - b.floor;
     const mgFloors = masterGroupFloorsFor(ctx, group);
+
+    if (settings.singleFloorPref === 'lowestAccessible') {
+        candidates.sort(lowest);
+    } else if (settings.singleFloorPref === 'masterGroupCohesive' && mgFloors && mgFloors.size > 0) {
+        candidates.sort((a, b) => {
+            const ao = mgFloors.has(a.floor) ? 0 : 1;
+            const bo = mgFloors.has(b.floor) ? 0 : 1;
+            if (ao !== bo) return ao - bo;
+            return tightest(a, b);
+        });
+    } else {
+        candidates.sort(tightest);
+    }
+
+    const chosenFloor = candidates[0].floor;
+    // Use the real pool so consumed rooms are tracked outside via assigned flag (set in commit).
+    const realPool = new Map();
+    for (const [t, arr] of floorByType.get(chosenFloor).entries()) realPool.set(t, arr.slice());
+    const { picked, unitsDone } = fillUnitsOnFloor(realPool, bundles, group.count);
+    if (unitsDone < group.count) return null;
+    return { picked, unitsDone, multiFloor: false };
+}
+
+function attemptMultiFloorBundles(group, bundles, ctx, settings) {
+    const allowedTypes = [...new Set(bundles.map(b => b.type))];
+    const floorByType = freeRoomsByFloorByType(ctx.roomsByType, allowedTypes);
+    if (floorByType.size === 0) return null;
 
     let orderedFloors;
     if (settings.multiFloorPref === 'adjacent') {
-        const win = findContiguousFloorWindow(byFloor, group.count, mgFloors);
-        orderedFloors = win ? win.windowFloors : sortFloorsLargestFirst(byFloor);
+        const mgFloors = masterGroupFloorsFor(ctx, group);
+        const win = findContiguousFloorWindowForBundles(floorByType, bundles, group.count, mgFloors);
+        orderedFloors = win ? win.windowFloors : sortFloorsByCapacityDesc(floorByType);
     } else {
-        orderedFloors = sortFloorsLargestFirst(byFloor);
+        orderedFloors = sortFloorsByCapacityDesc(floorByType);
     }
 
-    const picks = pickAcrossFloorsMixed(byFloor, orderedFloors, group.count, group.type);
-    if (picks.length < group.count) return null;
-    return { type: group.type, picked: picks, multiFloor: true };
+    const pools = clonePoolsForFloors(floorByType, orderedFloors);
+    const { picked, unitsDone } = fillUnitsAcrossFloors(pools, orderedFloors, bundles, group.count);
+    if (unitsDone < group.count) return null;
+    return { picked, unitsDone, multiFloor: true };
+}
+
+function attemptPartialBundles(group, bundles, ctx, settings) {
+    const allowedTypes = [...new Set(bundles.map(b => b.type))];
+    const floorByType = freeRoomsByFloorByType(ctx.roomsByType, allowedTypes);
+    if (floorByType.size === 0) return { picked: [], unitsDone: 0, multiFloor: true };
+
+    const orderedFloors = settings.multiFloorPref === 'adjacent'
+        ? [...floorByType.keys()].sort((a, b) => a - b)
+        : sortFloorsByCapacityDesc(floorByType);
+
+    const pools = clonePoolsForFloors(floorByType, orderedFloors);
+    const { picked, unitsDone } = fillUnitsAcrossFloors(pools, orderedFloors, bundles, group.count);
+    return { picked, unitsDone, multiFloor: true };
 }
 
 function tryPlaceSingleFloor(group, ctx, settings) {
-    const types = getUpgradeTypesAsc(ctx.roomsByType, group.type, settings.allowTypeUpgrade, settings.fallbackRules);
-    for (const t of types) {
-        const res = attemptSingleFloorOnType(group, t, ctx, settings);
+    const bundles = buildBundles(group, settings);
+
+    // Try primary-only first: this preserves the original "all rooms same as
+    // requested type" preference, only resorting to substitutions when the
+    // primary type alone can't satisfy the group on a single floor.
+    if (bundles.length > 1) {
+        const primary = [bundles[0]];
+        const res = attemptSingleFloorBundles(group, primary, ctx, settings);
         if (res) { commitAssignment(group, res, 'success', ctx); return true; }
     }
-    if (types.length > 1) {
-        const mixed = attemptSingleFloorMixed(group, types, ctx, settings);
-        if (mixed) { commitAssignment(group, mixed, 'success', ctx); return true; }
-    }
+
+    const withSubs = attemptSingleFloorBundles(group, bundles, ctx, settings);
+    if (withSubs) { commitAssignment(group, withSubs, 'success', ctx); return true; }
+
     return false;
 }
 
 function tryPlaceMultiFloor(group, ctx, settings) {
     if (settings.noSplit) { commitFailed(group, ctx); return; }
 
-    const types = getUpgradeTypesAsc(ctx.roomsByType, group.type, settings.allowTypeUpgrade, settings.fallbackRules);
+    const bundles = buildBundles(group, settings);
 
-    for (const t of types) {
-        const res = attemptMultiFloorFull(group, t, ctx, settings);
+    // Same staged approach across floors.
+    if (bundles.length > 1) {
+        const primary = [bundles[0]];
+        const res = attemptMultiFloorBundles(group, primary, ctx, settings);
         if (res) { commitAssignment(group, res, 'success', ctx); return; }
     }
 
-    if (types.length > 1) {
-        const mixed = attemptMultiFloorMixed(group, types, ctx, settings);
-        if (mixed) { commitAssignment(group, mixed, 'success', ctx); return; }
-    }
+    const withSubs = attemptMultiFloorBundles(group, bundles, ctx, settings);
+    if (withSubs) { commitAssignment(group, withSubs, 'success', ctx); return; }
 
-    const partial = attemptMultiFloorPartial(group, types, ctx, settings);
-    if (partial.picked.length === 0) {
+    const partial = attemptPartialBundles(group, bundles, ctx, settings);
+    if (partial.unitsDone === 0) {
         commitFailed(group, ctx);
-    } else if (partial.picked.length < group.count) {
-        commitAssignment(group, partial, 'partial', ctx);
     } else {
-        commitAssignment(group, partial, 'success', ctx);
+        commitAssignment(group, partial, 'partial', ctx);
     }
 }
 
@@ -544,6 +628,8 @@ function tryPlaceMultiFloor(group, ctx, settings) {
 
 function commitAssignment(group, res, status, ctx) {
     const { picked, multiFloor } = res;
+    const unitsDone = Number.isFinite(res.unitsDone) ? res.unitsDone : picked.length;
+
     const floorsMap = {};
     const floorsTouched = new Set();
     for (const r of picked) {
@@ -575,10 +661,16 @@ function commitAssignment(group, res, status, ctx) {
     const bedsRequested = group.type * group.count;
     const bedsAssigned = picked.reduce((s, r) => s + (r.type || 0), 0);
     const upgraded = picked.some(r => r.type > group.type);
+    const downsized = picked.some(r => r.type < group.type);
+    const substituted = picked.some(r => r.type !== group.type);
     const maxPickedType = picked.reduce((m, r) => Math.max(m, r.type || 0), group.type);
-    const bedWaste = upgraded ? Math.max(0, bedsAssigned - bedsRequested) : 0;
+    const bedWaste = Math.max(0, bedsAssigned - bedsRequested);
 
-    const missing = group.count - picked.length;
+    // Bundle breakdown: count rooms per (type) for display.
+    const typeBreakdown = {};
+    for (const r of picked) typeBreakdown[r.type] = (typeBreakdown[r.type] || 0) + 1;
+
+    const missing = Math.max(0, group.count - unitsDone);
     const finalStatus = missing > 0 ? 'partial' : status;
 
     ctx.results.push({
@@ -588,7 +680,10 @@ function commitAssignment(group, res, status, ctx) {
         type: group.type,
         actualType: upgraded ? maxPickedType : group.type,
         upgraded,
+        downsized,
+        substituted,
         requested: group.count,
+        unitsDone,
         assignedCount: picked.length,
         floors: floorsMap,
         multiFloor,
@@ -597,6 +692,7 @@ function commitAssignment(group, res, status, ctx) {
         bedsAssigned,
         bedWaste,
         floorSpan,
+        typeBreakdown,
     });
 
     if (missing === 0) {
@@ -619,7 +715,10 @@ function commitFailed(group, ctx) {
         type: group.type,
         actualType: group.type,
         upgraded: false,
+        downsized: false,
+        substituted: false,
         requested: group.count,
+        unitsDone: 0,
         assignedCount: 0,
         floors: {},
         multiFloor: false,
@@ -628,6 +727,7 @@ function commitFailed(group, ctx) {
         bedsAssigned: 0,
         bedWaste: 0,
         floorSpan: 0,
+        typeBreakdown: {},
     });
     ctx.unassignedGroupsList.push({
         groupName: group.name,
@@ -729,10 +829,20 @@ function buildResultCard(r) {
     }
 
     const summary = document.createElement('small');
-    const typeLabel = r.upgraded
-        ? `نوع ${r.type} \u2192 ${r.actualType}`
-        : `نوع ${r.type}`;
-    summary.textContent = `${typeLabel} \u2022 مطلوب ${r.requested} \u2022 مخصص ${r.assignedCount}`;
+    let typeLabel;
+    if (r.substituted) {
+        // Show breakdown: "نوع 4 → 2×2, 1×4" means 2 rooms of type 2 and 1 of type 4.
+        const parts = Object.entries(r.typeBreakdown || {})
+            .map(([t, c]) => `${c}\u00d7${t}`)
+            .join(', ');
+        typeLabel = `نوع ${r.type} \u2192 ${parts}`;
+    } else {
+        typeLabel = `نوع ${r.type}`;
+    }
+    const unitsLabel = r.requested === r.unitsDone
+        ? `وحدات ${r.unitsDone}`
+        : `وحدات ${r.unitsDone}/${r.requested}`;
+    summary.textContent = `${typeLabel} \u2022 ${unitsLabel} \u2022 غرف ${r.assignedCount}`;
     titleWrap.appendChild(document.createElement('br'));
     titleWrap.appendChild(summary);
 
@@ -785,12 +895,12 @@ function buildResultCard(r) {
     if (r.status === 'partial') {
         const m = document.createElement('div');
         m.className = 'missing-row';
-        m.textContent = `يتبقى ${r.missing} غرفة من النوع ${r.type}`;
+        m.textContent = `يتبقى ${r.missing} وحدة من النوع ${r.type}`;
         body.appendChild(m);
     } else if (r.status === 'failed') {
         const m = document.createElement('div');
         m.className = 'missing-row failed';
-        m.textContent = `تعذّر التوزيع: لا توجد كتلة كافية ${r.requested} غرفة على طابق واحد`;
+        m.textContent = `تعذّر التوزيع: لا توجد كتلة كافية لـ ${r.requested} وحدة على طابق واحد`;
         body.appendChild(m);
     }
 
@@ -1339,6 +1449,114 @@ function escapeHtml(s) {
 // Fallback rules repeater UI
 // ============================================================================
 
+function buildBundleNode(bundle) {
+    const row = document.createElement('div');
+    row.className = 'fr-bundle';
+
+    const label1 = document.createElement('label');
+    label1.textContent = 'بديل';
+    row.appendChild(label1);
+
+    const cnt = document.createElement('input');
+    cnt.type = 'number';
+    cnt.min = '1';
+    cnt.step = '1';
+    cnt.value = String(bundle.count);
+    cnt.dataset.field = 'bundle-count';
+    cnt.title = 'عدد الغرف لكل وحدة';
+    row.appendChild(cnt);
+
+    const times = document.createElement('span');
+    times.className = 'fr-times';
+    times.textContent = '\u00d7';
+    row.appendChild(times);
+
+    const label2 = document.createElement('label');
+    label2.textContent = 'نوع';
+    row.appendChild(label2);
+
+    const typ = document.createElement('input');
+    typ.type = 'number';
+    typ.min = '1';
+    typ.step = '1';
+    typ.value = String(bundle.type);
+    typ.dataset.field = 'bundle-type';
+    typ.title = 'نوع الغرفة البديلة';
+    row.appendChild(typ);
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'fr-del-bundle';
+    del.dataset.action = 'delete-bundle';
+    del.innerHTML = '<i class="bi bi-x-lg"></i> حذف';
+    del.title = 'حذف البديل';
+    row.appendChild(del);
+
+    return row;
+}
+
+function buildRuleNode(rule, idx) {
+    const card = document.createElement('div');
+    card.className = 'fr-rule';
+    card.dataset.index = String(idx);
+
+    const head = document.createElement('div');
+    head.className = 'fr-rule-head';
+
+    const headLabel = document.createElement('label');
+    headLabel.textContent = 'النوع المطلوب';
+    head.appendChild(headLabel);
+
+    const fromInput = document.createElement('input');
+    fromInput.type = 'number';
+    fromInput.min = '1';
+    fromInput.step = '1';
+    fromInput.value = String(rule.from);
+    fromInput.dataset.field = 'from';
+    head.appendChild(fromInput);
+
+    const arrow = document.createElement('span');
+    arrow.className = 'fr-rule-arrow';
+    arrow.innerHTML = '<i class="bi bi-arrow-left"></i>';
+    head.appendChild(arrow);
+
+    const tag = document.createElement('span');
+    tag.className = 'fr-rule-tag';
+    tag.textContent = 'البدائل المسموحة';
+    head.appendChild(tag);
+
+    const delRule = document.createElement('button');
+    delRule.type = 'button';
+    delRule.className = 'fr-del-rule';
+    delRule.dataset.action = 'delete-rule';
+    delRule.innerHTML = '<i class="bi bi-trash"></i> حذف القاعدة';
+    head.appendChild(delRule);
+
+    card.appendChild(head);
+
+    const bundles = document.createElement('div');
+    bundles.className = 'fr-bundles';
+    bundles.dataset.bundles = '';
+    if (rule.to.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'fr-bundles-empty';
+        empty.textContent = 'لا توجد بدائل بعد. أضف بديلًا أو ستبقى الترقية معطلة لهذا النوع.';
+        bundles.appendChild(empty);
+    } else {
+        for (const b of rule.to) bundles.appendChild(buildBundleNode(b));
+    }
+    card.appendChild(bundles);
+
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'fr-add-bundle';
+    addBtn.dataset.action = 'add-bundle';
+    addBtn.innerHTML = '<i class="bi bi-plus-lg"></i> إضافة بديل';
+    card.appendChild(addBtn);
+
+    return card;
+}
+
 function renderFallbackRules() {
     const list = els.fallbackRulesList;
     if (!list) return;
@@ -1355,77 +1573,40 @@ function renderFallbackRules() {
     }
 
     const frag = document.createDocumentFragment();
-    rules.forEach((rule, idx) => {
-        const row = document.createElement('div');
-        row.className = 'fr-row';
-        row.dataset.index = String(idx);
-
-        const fromWrap = document.createElement('div');
-        fromWrap.className = 'fr-from-wrap';
-        const fromLabel = document.createElement('label');
-        fromLabel.textContent = 'النوع المطلوب';
-        const fromInput = document.createElement('input');
-        fromInput.type = 'number';
-        fromInput.min = '1';
-        fromInput.step = '1';
-        fromInput.value = String(rule.from);
-        fromInput.dataset.field = 'from';
-        fromWrap.appendChild(fromLabel);
-        fromWrap.appendChild(fromInput);
-
-        const arrow = document.createElement('span');
-        arrow.className = 'fr-arrow';
-        arrow.innerHTML = '<i class="bi bi-arrow-left"></i>';
-
-        const toWrap = document.createElement('div');
-        toWrap.className = 'fr-to-wrap';
-        const toLabel = document.createElement('label');
-        toLabel.textContent = 'بدائل';
-        const toInput = document.createElement('input');
-        toInput.type = 'text';
-        toInput.value = rule.to.join(', ');
-        toInput.dataset.field = 'to';
-        toInput.placeholder = 'مثال: 3, 4, 5';
-        toWrap.appendChild(toLabel);
-        toWrap.appendChild(toInput);
-
-        const del = document.createElement('button');
-        del.type = 'button';
-        del.className = 'fr-del';
-        del.dataset.action = 'delete';
-        del.innerHTML = '<i class="bi bi-trash"></i>';
-        del.title = 'حذف';
-
-        row.appendChild(fromWrap);
-        row.appendChild(arrow);
-        row.appendChild(toWrap);
-        row.appendChild(del);
-        frag.appendChild(row);
-    });
+    rules.forEach((rule, idx) => frag.appendChild(buildRuleNode(rule, idx)));
     list.appendChild(frag);
 }
 
 function collectFallbackRulesFromDOM() {
     const list = els.fallbackRulesList;
     if (!list) return loadFallbackRules();
-    const rows = list.querySelectorAll('.fr-row');
+    const ruleNodes = list.querySelectorAll('.fr-rule');
     const rules = [];
-    rows.forEach(row => {
-        const fromVal = parseInt(row.querySelector('input[data-field="from"]').value, 10);
-        const toRaw = row.querySelector('input[data-field="to"]').value || '';
+    ruleNodes.forEach(card => {
+        const fromInput = card.querySelector('input[data-field="from"]');
+        if (!fromInput) return;
+        const fromVal = parseInt(fromInput.value, 10);
         if (!Number.isFinite(fromVal) || fromVal <= 0) return;
-        const to = toRaw
-            .split(/[\s,;]+/)
-            .map(x => parseInt(x, 10))
-            .filter(x => Number.isFinite(x) && x > 0 && x !== fromVal);
-        rules.push({ from: fromVal, to: [...new Set(to)] });
+
+        const to = [];
+        const bundleNodes = card.querySelectorAll('.fr-bundle');
+        bundleNodes.forEach(bnode => {
+            const cnt = parseInt(bnode.querySelector('input[data-field="bundle-count"]').value, 10);
+            const typ = parseInt(bnode.querySelector('input[data-field="bundle-type"]').value, 10);
+            if (!Number.isFinite(cnt) || cnt <= 0) return;
+            if (!Number.isFinite(typ) || typ <= 0) return;
+            // Drop self-mapping with count 1 (would be redundant with primary).
+            if (typ === fromVal && cnt === 1) return;
+            to.push({ type: typ, count: cnt });
+        });
+
+        rules.push({ from: fromVal, to });
     });
     return rules;
 }
 
 function persistFallbackRulesFromDOM() {
-    const rules = collectFallbackRulesFromDOM();
-    saveFallbackRules(rules);
+    saveFallbackRules(collectFallbackRulesFromDOM());
 }
 
 function initFallbackRulesUI() {
@@ -1436,19 +1617,64 @@ function initFallbackRulesUI() {
 
     list.addEventListener('input', (e) => {
         const target = e.target;
-        if (target && (target.matches('input[data-field="from"]') || target.matches('input[data-field="to"]'))) {
+        if (!target) return;
+        if (target.matches('input[data-field="from"]')
+            || target.matches('input[data-field="bundle-type"]')
+            || target.matches('input[data-field="bundle-count"]')) {
             persistFallbackRulesFromDOM();
         }
     });
 
     list.addEventListener('click', (e) => {
-        const btn = e.target.closest('button[data-action="delete"]');
-        if (!btn) return;
-        const row = btn.closest('.fr-row');
-        if (!row) return;
-        row.remove();
-        persistFallbackRulesFromDOM();
-        if (list.querySelectorAll('.fr-row').length === 0) renderFallbackRules();
+        const delBundleBtn = e.target.closest('button[data-action="delete-bundle"]');
+        if (delBundleBtn) {
+            const bundleNode = delBundleBtn.closest('.fr-bundle');
+            const bundlesWrap = delBundleBtn.closest('[data-bundles]');
+            if (bundleNode) bundleNode.remove();
+            // Re-show the empty hint if all bundles gone.
+            if (bundlesWrap && bundlesWrap.querySelectorAll('.fr-bundle').length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'fr-bundles-empty';
+                empty.textContent = 'لا توجد بدائل بعد. أضف بديلًا أو ستبقى الترقية معطلة لهذا النوع.';
+                bundlesWrap.appendChild(empty);
+            }
+            persistFallbackRulesFromDOM();
+            return;
+        }
+
+        const addBundleBtn = e.target.closest('button[data-action="add-bundle"]');
+        if (addBundleBtn) {
+            const card = addBundleBtn.closest('.fr-rule');
+            if (!card) return;
+            const bundlesWrap = card.querySelector('[data-bundles]');
+            if (!bundlesWrap) return;
+            // Remove empty hint if present.
+            const emptyHint = bundlesWrap.querySelector('.fr-bundles-empty');
+            if (emptyHint) emptyHint.remove();
+            // Suggest a sensible default: next-higher type, count 1.
+            const fromVal = parseInt(card.querySelector('input[data-field="from"]').value, 10) || 1;
+            // Find used types to avoid trivial duplicates.
+            const usedTypes = new Set(
+                [...bundlesWrap.querySelectorAll('input[data-field="bundle-type"]')]
+                    .map(i => parseInt(i.value, 10))
+                    .filter(Number.isFinite)
+            );
+            let suggestedType = fromVal + 1;
+            while (usedTypes.has(suggestedType)) suggestedType++;
+            bundlesWrap.appendChild(buildBundleNode({ type: suggestedType, count: 1 }));
+            persistFallbackRulesFromDOM();
+            return;
+        }
+
+        const delRuleBtn = e.target.closest('button[data-action="delete-rule"]');
+        if (delRuleBtn) {
+            const card = delRuleBtn.closest('.fr-rule');
+            if (!card) return;
+            card.remove();
+            persistFallbackRulesFromDOM();
+            if (list.querySelectorAll('.fr-rule').length === 0) renderFallbackRules();
+            return;
+        }
     });
 
     if (els.btnAddFallbackRule) {

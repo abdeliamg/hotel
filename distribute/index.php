@@ -424,65 +424,141 @@ require_once __DIR__ . '/../includes/root_nav.php';
 
         .fallback-rules .fr-actions .btn { font-size: 12px; padding: 4px 10px; }
 
-        .fr-list { display: flex; flex-direction: column; gap: 6px; }
+        .fr-list { display: flex; flex-direction: column; gap: 10px; }
 
-        .fr-row {
+        .fr-rule {
+            background: #f8fafc;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .fr-rule-head {
             display: flex;
             align-items: center;
             gap: 8px;
             flex-wrap: wrap;
-            background: #f8fafc;
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 6px 10px;
         }
 
-        .fr-row .fr-from-wrap,
-        .fr-row .fr-to-wrap { display: flex; align-items: center; gap: 6px; }
+        .fr-rule-head label {
+            font-size: 12px;
+            color: var(--muted);
+            margin: 0;
+            white-space: nowrap;
+            font-weight: 600;
+        }
 
-        .fr-row .fr-from-wrap { flex-shrink: 0; }
+        .fr-rule-head .fr-rule-arrow {
+            color: var(--muted);
+            font-size: 13px;
+            margin-inline-start: 4px;
+        }
 
-        .fr-row .fr-to-wrap { flex: 1; min-width: 200px; }
+        .fr-rule-head .fr-rule-tag {
+            font-size: 12px;
+            color: var(--primary-dark);
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            border-radius: 999px;
+            padding: 2px 10px;
+            font-weight: 600;
+        }
 
-        .fr-row label {
+        .fr-rule-head .fr-del-rule {
+            margin-inline-start: auto;
+            background: transparent;
+            border: 1px solid #fecaca;
+            color: var(--danger);
+            border-radius: 6px;
+            padding: 3px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: background 0.15s;
+        }
+
+        .fr-rule-head .fr-del-rule:hover { background: #fee2e2; }
+
+        .fr-bundles {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding-inline-start: 12px;
+            border-inline-start: 2px solid #e2e8f0;
+        }
+
+        .fr-bundles-empty {
+            font-size: 12px;
+            color: var(--muted);
+            padding: 4px 8px;
+            font-style: italic;
+        }
+
+        .fr-bundle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+            background: #ffffff;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 5px 8px;
+        }
+
+        .fr-bundle label {
             font-size: 12px;
             color: var(--muted);
             margin: 0;
             white-space: nowrap;
         }
 
-        .fr-row input[type="number"] {
-            width: 70px;
-            padding: 4px 8px;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            font-size: 13px;
+        .fr-bundle .fr-times {
+            color: var(--muted);
+            font-weight: 700;
         }
 
-        .fr-row input[type="text"] {
-            flex: 1;
-            padding: 4px 8px;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            font-size: 13px;
-            font-family: 'Consolas', monospace;
-            min-width: 0;
-        }
-
-        .fr-row .fr-arrow { color: var(--muted); font-size: 14px; }
-
-        .fr-row .fr-del {
+        .fr-bundle .fr-del-bundle {
+            margin-inline-start: auto;
             background: transparent;
             border: 1px solid #fecaca;
             color: var(--danger);
             border-radius: 6px;
-            padding: 3px 8px;
-            font-size: 12px;
+            padding: 2px 8px;
+            font-size: 11px;
             cursor: pointer;
             transition: background 0.15s;
         }
 
-        .fr-row .fr-del:hover { background: #fee2e2; }
+        .fr-bundle .fr-del-bundle:hover { background: #fee2e2; }
+
+        .fr-rule input[type="number"] {
+            width: 64px;
+            padding: 3px 6px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+            text-align: center;
+        }
+
+        .fr-rule .fr-add-bundle {
+            align-self: flex-start;
+            background: transparent;
+            border: 1px dashed var(--primary);
+            color: var(--primary-dark);
+            border-radius: 8px;
+            padding: 4px 12px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.15s;
+            margin-inline-start: 12px;
+        }
+
+        .fr-rule .fr-add-bundle:hover { background: #eff6ff; }
 
         .fr-empty {
             text-align: center;
@@ -804,7 +880,8 @@ require_once __DIR__ . '/../includes/root_nav.php';
                         </button>
                     </div>
                     <div class="fr-hint">
-                        حدّد لكل نوع غرفة الأنواع البديلة المسموح أخذها عند نفاد النوع المطلوب (تفصل بفاصلة، مثال: <code>3, 4, 5</code>).
+                        حدّد لكل نوع غرفة "بدائل" يمكن استخدامها لتغطية وحدة طلب واحدة عند نفاد النوع المطلوب. كل بديل عبارة عن (عدد) × (نوع).
+                        مثلًا: لتغطية وحدة من نوع 4، يمكن استخدام بديل <code>2 × نوع 2</code> (غرفتان من النوع 2).
                         يتطلب تفعيل خيار "السماح بترقية النوع" أعلاه. يتم حفظ التغييرات تلقائيًا في المتصفح.
                     </div>
                 </div>
