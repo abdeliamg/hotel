@@ -394,8 +394,9 @@ require_once __DIR__ . '/../includes/root_nav.php';
             display: flex;
             align-items: center;
             gap: 8px;
-            flex-wrap: wrap;
             margin-bottom: 10px;
+            cursor: pointer;
+            user-select: none;
         }
 
         .fallback-rules .fr-head h6 {
@@ -410,19 +411,80 @@ require_once __DIR__ . '/../includes/root_nav.php';
 
         .fallback-rules .fr-head h6 i { color: var(--primary); }
 
-        .fallback-rules .fr-head .fr-hint {
+        .fallback-rules .fr-toggle {
+            margin-inline-start: auto;
+            border: none;
+            background: transparent;
+            color: var(--muted);
+            cursor: pointer;
+            padding: 2px 8px;
+            font-size: 14px;
+            border-radius: 6px;
+            transition: background 0.15s;
+        }
+
+        .fallback-rules .fr-toggle:hover { background: #f1f5f9; }
+
+        .fallback-rules.collapsed .fr-body { display: none; }
+        .fallback-rules.collapsed { margin-bottom: -4px; }
+
+        .fallback-rules.collapsed .fr-toggle i {
+            transform: rotate(0deg);
+        }
+
+        .fallback-rules:not(.collapsed) .fr-toggle i {
+            transform: rotate(180deg);
+        }
+
+        .fallback-rules .fr-toggle i { transition: transform 0.2s; }
+
+        .fr-subhead {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+
+        .fr-subhead .fr-hint {
             font-size: 12px;
             color: var(--muted);
             flex: 1 1 100%;
         }
 
-        .fallback-rules .fr-actions {
+        .fr-subhead .fr-actions {
             margin-inline-start: auto;
             display: flex;
             gap: 6px;
         }
 
-        .fallback-rules .fr-actions .btn { font-size: 12px; padding: 4px 10px; }
+        .fr-subhead .fr-actions .btn { font-size: 12px; padding: 4px 10px; }
+
+        .fr-save-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px dashed var(--border);
+        }
+
+        .fr-save-bar .btn { font-size: 13px; padding: 6px 14px; margin-inline-start: auto; }
+
+        .fr-status {
+            font-size: 12px;
+            color: var(--muted);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .fr-status.dirty { color: var(--warning); font-weight: 600; }
+        .fr-status.saved { color: var(--success); font-weight: 600; }
+        .fr-status.saving { color: var(--primary); }
+        .fr-status.error { color: var(--danger); font-weight: 600; }
+        .fr-status.loading { color: var(--muted); }
 
         .fr-list { display: flex; flex-direction: column; gap: 10px; }
 
@@ -868,24 +930,39 @@ require_once __DIR__ . '/../includes/root_nav.php';
                 </div>
             </div>
 
-            <div class="fallback-rules" id="fallbackRules">
+            <div class="fallback-rules collapsed" id="fallbackRules">
                 <div class="fr-head">
                     <h6><i class="bi bi-arrow-left-right"></i> قواعد البدائل بين أنواع الغرف</h6>
-                    <div class="fr-actions">
-                        <button type="button" class="btn btn-outline-primary btn-sm" id="btnAddFallbackRule">
-                            <i class="bi bi-plus-lg"></i> إضافة قاعدة
-                        </button>
-                        <button type="button" class="btn btn-outline-secondary btn-sm" id="btnResetFallbackRules">
-                            <i class="bi bi-arrow-counterclockwise"></i> الافتراضي
-                        </button>
+                    <button type="button" class="fr-toggle" id="btnToggleFallbackRules" aria-label="تبديل">
+                        <i class="bi bi-chevron-down"></i>
+                    </button>
+                </div>
+                <div class="fr-body" id="fallbackRulesBody">
+                    <div class="fr-subhead">
+                        <div class="fr-actions">
+                            <button type="button" class="btn btn-outline-primary btn-sm" id="btnAddFallbackRule">
+                                <i class="bi bi-plus-lg"></i> إضافة قاعدة
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" id="btnResetFallbackRules">
+                                <i class="bi bi-arrow-counterclockwise"></i> الافتراضي
+                            </button>
+                        </div>
+                        <div class="fr-hint">
+                            حدّد لكل نوع غرفة "بدائل" يمكن استخدامها لتغطية وحدة طلب واحدة عند نفاد النوع المطلوب. كل بديل عبارة عن (عدد) × (نوع).
+                            مثلًا: لتغطية وحدة من نوع 4، يمكن استخدام بديل <code>2 × نوع 2</code> (غرفتان من النوع 2).
+                            يتطلب تفعيل خيار "السماح بترقية النوع" أعلاه. القواعد محفوظة على الخادم ومشتركة بين جميع المستخدمين.
+                        </div>
                     </div>
-                    <div class="fr-hint">
-                        حدّد لكل نوع غرفة "بدائل" يمكن استخدامها لتغطية وحدة طلب واحدة عند نفاد النوع المطلوب. كل بديل عبارة عن (عدد) × (نوع).
-                        مثلًا: لتغطية وحدة من نوع 4، يمكن استخدام بديل <code>2 × نوع 2</code> (غرفتان من النوع 2).
-                        يتطلب تفعيل خيار "السماح بترقية النوع" أعلاه. يتم حفظ التغييرات تلقائيًا في المتصفح.
+                    <div class="fr-list" id="fallbackRulesList"></div>
+                    <div class="fr-save-bar">
+                        <span class="fr-status" id="fallbackRulesStatus">
+                            <i class="bi bi-cloud-arrow-down"></i> جارٍ تحميل القواعد من الخادم...
+                        </span>
+                        <button type="button" class="btn btn-success btn-sm" id="btnSaveFallbackRules" disabled>
+                            <i class="bi bi-cloud-arrow-up"></i> حفظ على الخادم
+                        </button>
                     </div>
                 </div>
-                <div class="fr-list" id="fallbackRulesList"></div>
             </div>
         </div>
     </div>

@@ -56,6 +56,13 @@ const FALLBACK_RULES_STORAGE_KEY_V1 = 'distribute:typeFallbackRules:v1';
 const FALLBACK_RULES_STORAGE_KEY = 'distribute:typeFallbackRules:v2';
 
 let fallbackRulesCache = null;
+// True once we've successfully fetched rules from the server. Until then we
+// fall back to localStorage / defaults so the page still works offline.
+let fallbackRulesLoadedFromServer = false;
+// True when the in-DOM rules differ from the last server-saved snapshot.
+let fallbackRulesDirty = false;
+// Last value confirmed saved to the server (JSON string for comparison).
+let fallbackRulesServerSnapshot = null;
 
 function cloneDefaultFallbackRules() {
     return DEFAULT_FALLBACK_RULES.map(r => ({
@@ -1607,13 +1614,143 @@ function collectFallbackRulesFromDOM() {
 
 function persistFallbackRulesFromDOM() {
     saveFallbackRules(collectFallbackRulesFromDOM());
+    markFallbackRulesDirty();
+}
+
+// ----------------------------------------------------------------------------
+// Server sync: load / save the fallback rules so they are shared across users.
+// localStorage still acts as a draft buffer if the user reloads the page
+// before pressing "Save".
+// ----------------------------------------------------------------------------
+
+function rulesEqual(a, b) {
+    try { return JSON.stringify(a) === JSON.stringify(b); }
+    catch (e) { return false; }
+}
+
+function setFallbackRulesStatus(stateName, text, iconClass) {
+    const el = els.fallbackRulesStatus;
+    if (!el) return;
+    el.className = 'fr-status ' + (stateName || '');
+    const icon = iconClass ? `<i class="bi ${iconClass}"></i> ` : '';
+    el.innerHTML = icon + escapeHtml(text);
+}
+
+function markFallbackRulesDirty() {
+    if (!fallbackRulesLoadedFromServer) return;
+    const current = collectFallbackRulesFromDOM();
+    const dirty = !rulesEqual(current, JSON.parse(fallbackRulesServerSnapshot || '[]'));
+    fallbackRulesDirty = dirty;
+    if (els.btnSaveFallbackRules) els.btnSaveFallbackRules.disabled = !dirty;
+    if (dirty) {
+        setFallbackRulesStatus('dirty', 'تغييرات غير محفوظة', 'bi-exclamation-circle');
+    } else {
+        setFallbackRulesStatus('saved', 'لا توجد تغييرات', 'bi-check2-circle');
+    }
+}
+
+function loadFallbackRulesFromServer() {
+    setFallbackRulesStatus('loading', 'جارٍ تحميل القواعد من الخادم...', 'bi-cloud-arrow-down');
+    if (els.btnSaveFallbackRules) els.btnSaveFallbackRules.disabled = true;
+
+    return fetch('get_fallback_rules.php', { credentials: 'same-origin' })
+        .then(r => r.json())
+        .then(data => {
+            if (!data || data.status !== 'ok') {
+                throw new Error(data && data.message ? data.message : 'فشل التحميل');
+            }
+            fallbackRulesLoadedFromServer = true;
+            if (Array.isArray(data.rules)) {
+                const serverRules = normalizeRules(data.rules);
+                fallbackRulesCache = serverRules;
+                try { localStorage.setItem(FALLBACK_RULES_STORAGE_KEY, JSON.stringify(serverRules)); } catch (e) {}
+                fallbackRulesServerSnapshot = JSON.stringify(serverRules);
+                fallbackRulesDirty = false;
+                renderFallbackRules();
+                const ts = data.updated_at ? ` (آخر تحديث: ${data.updated_at})` : '';
+                setFallbackRulesStatus('saved', 'محفوظ على الخادم' + ts, 'bi-cloud-check');
+                if (els.btnSaveFallbackRules) els.btnSaveFallbackRules.disabled = true;
+            } else {
+                // Server has nothing yet -> keep whatever we already have
+                // locally (or defaults) and let the user push them up via Save.
+                fallbackRulesServerSnapshot = JSON.stringify([]);
+                fallbackRulesDirty = true;
+                renderFallbackRules();
+                setFallbackRulesStatus('dirty', 'لا توجد قواعد محفوظة على الخادم - اضغط "حفظ" لرفع القواعد الحالية', 'bi-cloud-slash');
+                if (els.btnSaveFallbackRules) els.btnSaveFallbackRules.disabled = false;
+            }
+        })
+        .catch(err => {
+            console.warn('Failed to load fallback rules from server:', err);
+            // Stay with whatever localStorage / defaults give us.
+            renderFallbackRules();
+            setFallbackRulesStatus('error', 'تعذّر التحميل من الخادم - يتم استخدام النسخة المحلية', 'bi-exclamation-triangle');
+            // Treat the local snapshot as if it were the server's so the user
+            // can save it explicitly to overwrite.
+            fallbackRulesServerSnapshot = JSON.stringify(loadFallbackRules());
+            fallbackRulesLoadedFromServer = true;
+            if (els.btnSaveFallbackRules) els.btnSaveFallbackRules.disabled = false;
+        });
+}
+
+function saveFallbackRulesToServer() {
+    const rules = collectFallbackRulesFromDOM();
+    setFallbackRulesStatus('saving', 'جارٍ الحفظ...', 'bi-cloud-arrow-up');
+    if (els.btnSaveFallbackRules) els.btnSaveFallbackRules.disabled = true;
+
+    return fetch('save_fallback_rules.php', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rules }),
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (!data || data.status !== 'ok') {
+                throw new Error(data && data.message ? data.message : 'فشل الحفظ');
+            }
+            const saved = Array.isArray(data.rules) ? normalizeRules(data.rules) : rules;
+            fallbackRulesCache = saved;
+            try { localStorage.setItem(FALLBACK_RULES_STORAGE_KEY, JSON.stringify(saved)); } catch (e) {}
+            fallbackRulesServerSnapshot = JSON.stringify(saved);
+            fallbackRulesDirty = false;
+            const ts = data.updated_at ? ` (${data.updated_at})` : '';
+            setFallbackRulesStatus('saved', 'تم الحفظ على الخادم' + ts, 'bi-cloud-check');
+            showToast('تم حفظ القواعد على الخادم', 'success');
+        })
+        .catch(err => {
+            console.error('Failed to save fallback rules:', err);
+            setFallbackRulesStatus('error', 'فشل الحفظ: ' + (err.message || ''), 'bi-exclamation-triangle');
+            if (els.btnSaveFallbackRules) els.btnSaveFallbackRules.disabled = false;
+            showToast('فشل الحفظ على الخادم', 'danger');
+        });
 }
 
 function initFallbackRulesUI() {
     const list = els.fallbackRulesList;
     if (!list) return;
 
+    // Collapse / expand. Collapsed by default (set via .collapsed class in PHP).
+    if (els.fallbackRulesPanel) {
+        const head = els.fallbackRulesPanel.querySelector('.fr-head');
+        const togglePanel = () => {
+            els.fallbackRulesPanel.classList.toggle('collapsed');
+        };
+        if (head) head.addEventListener('click', (e) => {
+            // Only toggle when clicking the header itself (not inputs/buttons inside).
+            if (e.target.closest('button') && !e.target.closest('#btnToggleFallbackRules')) return;
+            togglePanel();
+        });
+    }
+
+    if (els.btnSaveFallbackRules) {
+        els.btnSaveFallbackRules.addEventListener('click', saveFallbackRulesToServer);
+    }
+
     renderFallbackRules();
+    // Kick off the server fetch. Render once with local fallback so the UI is
+    // never empty, then re-render after the server responds.
+    loadFallbackRulesFromServer();
 
     list.addEventListener('input', (e) => {
         const target = e.target;
@@ -1686,15 +1823,17 @@ function initFallbackRulesUI() {
             rules.push({ from: nextFrom, to: [] });
             saveFallbackRules(rules);
             renderFallbackRules();
+            markFallbackRulesDirty();
         });
     }
 
     if (els.btnResetFallbackRules) {
         els.btnResetFallbackRules.addEventListener('click', () => {
-            if (!confirm('سيتم استعادة قواعد البدائل الافتراضية. هل تريد المتابعة؟')) return;
+            if (!confirm('سيتم استعادة قواعد البدائل الافتراضية محليًا. اضغط "حفظ على الخادم" لمشاركتها مع باقي المستخدمين. هل تريد المتابعة؟')) return;
             saveFallbackRules(cloneDefaultFallbackRules());
             renderFallbackRules();
-            showToast('تم استعادة القواعد الافتراضية', 'info');
+            markFallbackRulesDirty();
+            showToast('تم استعادة القواعد الافتراضية محليًا', 'info');
         });
     }
 }
@@ -1735,9 +1874,14 @@ document.addEventListener('DOMContentLoaded', () => {
     els.setNoSplit = document.getElementById('setNoSplit');
     els.setAllowUpgrade = document.getElementById('setAllowUpgrade');
 
+    els.fallbackRulesPanel = document.getElementById('fallbackRules');
+    els.fallbackRulesBody = document.getElementById('fallbackRulesBody');
     els.fallbackRulesList = document.getElementById('fallbackRulesList');
+    els.fallbackRulesStatus = document.getElementById('fallbackRulesStatus');
     els.btnAddFallbackRule = document.getElementById('btnAddFallbackRule');
     els.btnResetFallbackRules = document.getElementById('btnResetFallbackRules');
+    els.btnSaveFallbackRules = document.getElementById('btnSaveFallbackRules');
+    els.btnToggleFallbackRules = document.getElementById('btnToggleFallbackRules');
 
     if (els.setGroupOrder) els.setGroupOrder.value = DEFAULT_SETTINGS.groupOrder;
     if (els.setSingleFloorPref) els.setSingleFloorPref.value = DEFAULT_SETTINGS.singleFloorPref;

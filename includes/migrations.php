@@ -22,6 +22,15 @@ function run_database_migrations(PDO $pdo): void
             $pdo->exec("CREATE INDEX IF NOT EXISTS idx_pilgrim_flight_departed ON pilgrim_flight(departed)");
             $pdo->exec("CREATE INDEX IF NOT EXISTS idx_pilgrim_flight_barcode ON pilgrim_flight(barcode)");
         },
+        '2026_05_28_create_app_settings' => static function (PDO $pdo): void {
+            $pdo->exec("
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    setting_key TEXT PRIMARY KEY,
+                    setting_value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            ");
+        },
     ];
 
     $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM schema_migrations WHERE migration = ?");
