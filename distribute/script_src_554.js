@@ -1068,54 +1068,79 @@ function escapeText(s) {
 // CSV export
 // ============================================================================
 
+function fetchMasterGroupsFromDB(groupNames) {
+    const unique = [...new Set(groupNames.filter(n => n && String(n).trim() !== ''))];
+    if (unique.length === 0) return Promise.resolve({});
+
+    return fetch('get_master_groups.php', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groups: unique }),
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (!data || data.status !== 'ok' || !data.map) return {};
+            return data.map;
+        })
+        .catch(err => {
+            console.warn('Failed to fetch master_groups from DB:', err);
+            return {};
+        });
+}
+
 function exportCSV() {
     if (state.assignedRows.length === 0 && state.unassignedRooms.length === 0) {
         showToast('لا توجد بيانات للتصدير. قم بالتوزيع أولاً.', 'warning');
         return;
     }
 
-    const withMg = state.hasMasterGroups;
-    let csv = '\uFEFF';
-    const header = withMg
-        ? 'room_num;room_type;group_name;master_group\n'
-        : 'room_num;room_type;group_name\n';
-    csv += header;
+    const wasDisabled = els.btnExport.disabled;
+    els.btnExport.disabled = true;
 
-    for (const row of state.assignedRows) {
-        if (withMg) {
-            csv += `${row.roomNumber};${row.type};${row.groupName};${row.masterGroup || ''}\n`;
-        } else {
-            csv += `${row.roomNumber};${row.type};${row.groupName}\n`;
+    const groupNames = [];
+    for (const row of state.assignedRows) if (row.groupName) groupNames.push(row.groupName);
+    for (const g of state.unassignedGroups) if (g.groupName) groupNames.push(g.groupName);
+
+    fetchMasterGroupsFromDB(groupNames).then(mgMap => {
+        const resolveMg = name => {
+            if (!name) return '';
+            if (Object.prototype.hasOwnProperty.call(mgMap, name)) return mgMap[name] || '';
+            return '';
+        };
+
+        let csv = '\uFEFF';
+        const header = 'room_num;room_type;group_name;master_group\n';
+        csv += header;
+
+        for (const row of state.assignedRows) {
+            const mg = resolveMg(row.groupName) || row.masterGroup || '';
+            csv += `${row.roomNumber};${row.type};${row.groupName};${mg}\n`;
         }
-    }
-    for (const row of state.unassignedRooms) {
-        if (withMg) {
+        for (const row of state.unassignedRooms) {
             csv += `${row.roomNumber};${row.type};غير مخصصة;\n`;
-        } else {
-            csv += `${row.roomNumber};${row.type};غير مخصصة\n`;
         }
-    }
-    if (state.unassignedGroups.length > 0) {
-        csv += '\n' + header;
-        for (const g of state.unassignedGroups) {
-            if (withMg) {
-                csv += `GROUP_UNASSIGNED;${g.type};${g.groupName}(${g.remaining});${g.masterGroup || ''}\n`;
-            } else {
-                csv += `GROUP_UNASSIGNED;${g.type};${g.groupName}(${g.remaining})\n`;
+        if (state.unassignedGroups.length > 0) {
+            csv += '\n' + header;
+            for (const g of state.unassignedGroups) {
+                const mg = resolveMg(g.groupName) || g.masterGroup || '';
+                csv += `GROUP_UNASSIGNED;${g.type};${g.groupName}(${g.remaining});${mg}\n`;
             }
         }
-    }
 
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `توزيع_الغرف_${formatDateForFile(new Date())}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    showToast('تم تصدير الملف', 'success');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `توزيع_الغرف_${formatDateForFile(new Date())}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        showToast('تم تصدير الملف', 'success');
+    }).finally(() => {
+        els.btnExport.disabled = wasDisabled;
+    });
 }
 
 // ============================================================================
