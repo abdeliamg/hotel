@@ -174,6 +174,24 @@ ReservedRooms AS (
      AND r.room_num   = ar.room_num
     GROUP BY ar.hotel_name
 ),
+OccupiedRooms AS (
+    SELECT DISTINCT hotel_name, room_num
+    FROM hotel_pilgrim
+),
+ReservedEmptyRooms AS (
+    -- Reserved (active) rooms that have no pilgrim assigned in hotel_pilgrim.
+    SELECT ar.hotel_name,
+           COUNT(ar.room_num) AS reserved_empty_rooms
+    FROM ActiveReservations ar
+    JOIN ActiveRooms r
+      ON r.hotel_name = ar.hotel_name
+     AND r.room_num   = ar.room_num
+    LEFT JOIN OccupiedRooms o
+      ON o.hotel_name = ar.hotel_name
+     AND o.room_num   = ar.room_num
+    WHERE o.room_num IS NULL
+    GROUP BY ar.hotel_name
+),
 PilgrimsCount AS (
     SELECT hotel_name, COUNT(*) AS pilgrims
     FROM hotel_pilgrim
@@ -184,12 +202,14 @@ SELECT h.hotel_name, h.address, h.note, h.id,
        COALESCE(rc.total_beds, 0)                  AS total_beds,
        COALESCE(rr.reserved_rooms, 0)              AS reserved_rooms,
        COALESCE(rc.total_rooms, 0) - COALESCE(rr.reserved_rooms, 0) AS available_rooms,
+       COALESCE(rer.reserved_empty_rooms, 0)       AS reserved_empty_rooms,
        COALESCE(rc.total_beds, 0)   - COALESCE(rr.reserved_beds, 0) AS available_beds,
        COALESCE(pc.pilgrims, 0)                    AS pilgrims_count
 FROM hotel h
-LEFT JOIN RoomCounts    rc ON h.hotel_name = rc.hotel_name
-LEFT JOIN ReservedRooms rr ON h.hotel_name = rr.hotel_name
-LEFT JOIN PilgrimsCount pc ON h.hotel_name = pc.hotel_name;
+LEFT JOIN RoomCounts         rc  ON h.hotel_name = rc.hotel_name
+LEFT JOIN ReservedRooms      rr  ON h.hotel_name = rr.hotel_name
+LEFT JOIN ReservedEmptyRooms rer ON h.hotel_name = rer.hotel_name
+LEFT JOIN PilgrimsCount      pc  ON h.hotel_name = pc.hotel_name;
 ");
 $hotels = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -309,6 +329,7 @@ function note_as_safe_href(string $note): ?string {
                     <th>عدد الأسرّة</th>
                     <th>الغرف المحجوزة</th>
                     <th>الغرف المتاحة</th>
+                    <th>الغرف المحجوزة المتاحة</th>
                     <th>الأسرّة المتاحة</th>
                     <th>إجمالي الحجاج</th>
                     <?php if ($isHotelAdmin): ?><th>الإجراءات</th><?php endif; ?>
@@ -330,6 +351,7 @@ function note_as_safe_href(string $note): ?string {
                         <td><?= e((string)$hotel['total_beds']) ?></td>
                         <td class="detail-clickable" data-detail="reserved" title="عرض الغرف المحجوزة"><?= e((string)$hotel['reserved_rooms']) ?></td>
                         <td class="detail-clickable" data-detail="available" title="عرض الغرف المتاحة"><?= e((string)$hotel['available_rooms']) ?></td>
+                        <td title="غرف محجوزة لا يوجد بها أي حاج"><?= e((string)$hotel['reserved_empty_rooms']) ?></td>
                         <td><?= e((string)$hotel['available_beds']) ?></td>
                         <td class="detail-clickable" data-detail="pilgrims" title="عرض الحجاج"><?= e((string)$hotel['pilgrims_count']) ?></td>
                         <?php if ($isHotelAdmin): ?>
