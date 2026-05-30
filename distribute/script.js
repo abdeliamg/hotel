@@ -648,6 +648,8 @@ function commitAssignment(group, res, status, ctx) {
         ctx.assignedRows.push({
             roomNumber: r.roomNumber,
             type: r.type,
+            requestedType: group.type,
+            isFallback: r.type !== group.type,
             groupName: group.name,
             masterGroup: group.masterGroup || '',
             floor: r.floor,
@@ -1102,8 +1104,8 @@ function fetchRoomsByHotelDate(hotel, dateFrom) {
         });
 }
 
-// Column order (always 8 columns):
-// group_name; hotel_name; floor; room_num; master_group; date_from; date_to; room_type
+// Column order (always 9 columns):
+// group_name; hotel_name; floor; room_num; master_group; date_from; date_to; room_type; note
 // Returns an array-of-arrays (first row = header) suitable for SheetJS.
 function buildExportRows(mgMap, roomMap, hotelName) {
     const resolveMg = name => {
@@ -1125,19 +1127,25 @@ function buildExportRows(mgMap, roomMap, hotelName) {
         if (row && row.type !== undefined && row.type !== null && row.type !== '') return row.type;
         return '';
     };
+    const fallbackNote = row => {
+        if (row && row.isFallback) {
+            return `بديل عن نوع ${row.requestedType}`;
+        }
+        return '';
+    };
     const hotel = hotelName || '';
 
-    const header = ['المجموعة', 'الفندق', 'الطابق', 'رقم الغرفة', 'التكتل', 'تاريخ البداية', 'تاريخ النهاية', 'نوع الغرفة'];
+    const header = ['المجموعة', 'الفندق', 'الطابق', 'رقم الغرفة', 'التكتل', 'تاريخ البداية', 'تاريخ النهاية', 'نوع الغرفة', 'ملاحظة'];
     const rows = [header];
 
     for (const row of state.assignedRows) {
         const mg = resolveMg(row.groupName) || row.masterGroup || '';
         const info = roomInfo(row.roomNumber);
-        rows.push([row.groupName, hotel, resolveFloor(info, row), row.roomNumber, mg, info.date_from || '', info.date_to || '', resolveType(info, row)]);
+        rows.push([row.groupName, hotel, resolveFloor(info, row), row.roomNumber, mg, info.date_from || '', info.date_to || '', resolveType(info, row), fallbackNote(row)]);
     }
     for (const row of state.unassignedRooms) {
         const info = roomInfo(row.roomNumber);
-        rows.push(['غير مخصصة', hotel, resolveFloor(info, row), row.roomNumber, '', info.date_from || '', info.date_to || '', resolveType(info, row)]);
+        rows.push(['غير مخصصة', hotel, resolveFloor(info, row), row.roomNumber, '', info.date_from || '', info.date_to || '', resolveType(info, row), '']);
     }
     if (state.unassignedGroups.length > 0) {
         // Blank separator row, then a repeated header for the unassigned block.
@@ -1145,7 +1153,7 @@ function buildExportRows(mgMap, roomMap, hotelName) {
         rows.push(header);
         for (const g of state.unassignedGroups) {
             const mg = resolveMg(g.groupName) || g.masterGroup || '';
-            rows.push([`${g.groupName}(${g.remaining})`, hotel, '', 'GROUP_UNASSIGNED', mg, '', '', g.type !== undefined && g.type !== null ? g.type : '']);
+            rows.push([`${g.groupName}(${g.remaining})`, hotel, '', 'GROUP_UNASSIGNED', mg, '', '', g.type !== undefined && g.type !== null ? g.type : '', '']);
         }
     }
     return rows;
@@ -1167,6 +1175,7 @@ function triggerXLSXDownload(rows) {
         { wch: 14 }, // date_from
         { wch: 14 }, // date_to
         { wch: 10 }, // room_type
+        { wch: 20 }, // note
     ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'التوزيع');
