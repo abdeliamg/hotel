@@ -35,7 +35,10 @@ CREATE TABLE IF NOT EXISTS "group" (
     mina TEXT,
     mina_location TEXT,
     arafa TEXT,
-    arafa_location TEXT
+    arafa_location TEXT,
+    -- When 1, every group sharing this master_group may assign pilgrims to ANY
+    -- room of a hotel it is reserved in (added via migration 2026_05_30).
+    all_rooms INTEGER NOT NULL DEFAULT 0
 );
 
 -- ============================================

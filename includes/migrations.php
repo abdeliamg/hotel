@@ -31,6 +31,18 @@ function run_database_migrations(PDO $pdo): void
                 )
             ");
         },
+        '2026_05_30_add_group_all_rooms' => static function (PDO $pdo): void {
+            $exists = false;
+            foreach ($pdo->query("PRAGMA table_info('group')")->fetchAll(PDO::FETCH_ASSOC) as $col) {
+                if (($col['name'] ?? '') === 'all_rooms') {
+                    $exists = true;
+                    break;
+                }
+            }
+            if (!$exists) {
+                $pdo->exec('ALTER TABLE "group" ADD COLUMN all_rooms INTEGER NOT NULL DEFAULT 0');
+            }
+        },
     ];
 
     $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM schema_migrations WHERE migration = ?");

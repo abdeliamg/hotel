@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/mg_cookie.php';
+require_once __DIR__ . '/room_access.php';
 
 $master_group = mg_cookie_get();
 $user = get_authenticated_user();
@@ -24,7 +25,11 @@ if ($group_name === '' && $master_group !== '') {
     $group_name = $master_group;
 }
 
-if ($group_name !== '') {
+// When the group has "all rooms" access for this hotel, drop the group filter
+// so every floor of the hotel becomes selectable.
+$allRooms = group_can_use_all_rooms($pdo, $group_name, $hotel_name);
+
+if ($group_name !== '' && !$allRooms) {
     $stmt = $pdo->prepare("SELECT DISTINCT floor FROM res WHERE hotel_name = :hotel_name AND group_name = :group_name ORDER BY floor");
     $stmt->bindValue(':hotel_name', $hotel_name);
     $stmt->bindValue(':group_name', $group_name);

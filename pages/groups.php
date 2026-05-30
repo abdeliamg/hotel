@@ -44,6 +44,7 @@ include('../check.php');
         <th>التكتل</th>
         <th>رقم المجموعة</th>
         <th>فندق مكة</th>
+        <th class="text-center" title="السماح بإسكان الحجاج في أي غرفة بالفندق المخصص للتكتل">جميع الغرف</th>
         <th>العمليات</th>
       </tr>
     </thead>
@@ -299,6 +300,17 @@ $(function(){
                .attr('data-mg', cellData == null ? '' : String(cellData));
       }},
       {data:'group_phone'},{data:'mecca_hotel'},
+      {data:'all_rooms', orderable:false, searchable:false, className:'text-center',
+        render: function(data, type, row){
+          const checked = (String(data) === '1') ? 'checked' : '';
+          const mg = (row.master_group == null) ? '' : String(row.master_group);
+          const safeMg = $('<div>').text(mg).html().replace(/"/g, '&quot;');
+          return '<div class="form-check d-inline-flex justify-content-center m-0">'
+               + '<input type="checkbox" class="form-check-input all-rooms-toggle" '
+               + 'style="cursor:pointer;width:1.2em;height:1.2em" '
+               + 'data-mg="' + safeMg + '" ' + checked + '>'
+               + '</div>';
+        }},
       {data:'actions',orderable:false,searchable:false}
     ],
     initComplete: function () {
@@ -334,6 +346,33 @@ $(function(){
         }
     });
 });
+  // ===== "جميع الغرف" toggle — applies to every group with the same master_group =====
+  $('#groupsTable').on('change', '.all-rooms-toggle', function(){
+    const $cb = $(this);
+    const mg = $cb.attr('data-mg') || '';
+    const newVal = $cb.is(':checked') ? 1 : 0;
+    if (mg === '') {
+        Swal.fire('تنبيه', 'هذه المجموعة بدون تكتل، لا يمكن تطبيق الخيار.', 'warning');
+        $cb.prop('checked', newVal !== 1);
+        return;
+    }
+    $cb.prop('disabled', true);
+    $.post('../includes/groups_server.php', { action: 'toggle_all_rooms', master_group: mg, value: newVal }, function(resp){
+        if (!resp || resp.status !== 'ok') {
+            Swal.fire('خطأ', (resp && resp.message) ? resp.message : 'تعذّر حفظ الخيار.', 'error');
+            $cb.prop('checked', newVal !== 1);
+            return;
+        }
+        // Reload so all rows sharing this master_group reflect the new state.
+        table.ajax.reload(null, false);
+    }, 'json').fail(function(){
+        Swal.fire('خطأ', 'تعذّر الاتصال بالخادم.', 'error');
+        $cb.prop('checked', newVal !== 1);
+    }).always(function(){
+        $cb.prop('disabled', false);
+    });
+  });
+
   $(document).on('click','.delete-btn',function(){
     const id=$(this).data('id');
     Swal.fire({title:'حذف؟',icon:'warning',showCancelButton:true}).then(r=>{

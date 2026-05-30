@@ -207,6 +207,21 @@ if (isset($_POST['action']) && $_POST['action'] === 'mg_credentials') {
     ]);
 }
 
+// ---------------------------------------------------------------------------
+// Toggle the "all rooms" flag (POST). Applies to EVERY group row that shares
+// the given master_group so the setting is consistent for the whole تكتل.
+// ---------------------------------------------------------------------------
+if (isset($_POST['action']) && $_POST['action'] === 'toggle_all_rooms') {
+    $mg = trim((string)($_POST['master_group'] ?? ''));
+    $val = ((int)($_POST['value'] ?? 0) === 1) ? 1 : 0;
+    if ($mg === '') {
+        groups_json_err('التكتل مطلوب.');
+    }
+    $stmt = $pdo->prepare('UPDATE "group" SET all_rooms = :v WHERE master_group = :mg');
+    $stmt->execute([':v' => $val, ':mg' => $mg]);
+    groups_json_ok(['updated' => $stmt->rowCount(), 'value' => $val]);
+}
+
 /* حذف جميع المجموعات */
 if (isset($_POST['delete_all_groups'])) {
   $pdo->exec("DELETE FROM `group`");

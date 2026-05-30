@@ -6,6 +6,7 @@ error_reporting(E_ALL);
 require_once __DIR__ . '/../includes/paste_import.php';
 require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/mg_cookie.php';
+require_once __DIR__ . '/room_access.php';
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -51,6 +52,26 @@ function hotel_pilgrim_resolve_group(PDO $pdo, string $hotelName, string $floor,
             ':room_num' => $roomNum,
             ':group_name' => $masterGroup,
         ]);
+        $groupName = $stmt->fetchColumn();
+        if ($groupName !== false) {
+            return (string)$groupName;
+        }
+
+        // "All rooms" mode: if enabled for this تكتل and it is reserved in this
+        // hotel, allow assigning to any room that exists in res for the hotel —
+        // the record is stored under the master_group itself.
+        if (group_can_use_all_rooms($pdo, $masterGroup, $hotelName)) {
+            $stmt = $pdo->prepare("SELECT COUNT(*) FROM res WHERE hotel_name = :hotel_name AND floor = :floor AND room_num = :room_num");
+            $stmt->execute([
+                ':hotel_name' => $hotelName,
+                ':floor' => $floor,
+                ':room_num' => $roomNum,
+            ]);
+            if ((int)$stmt->fetchColumn() > 0) {
+                return $masterGroup;
+            }
+        }
+        return null;
     } else {
         $stmt = $pdo->prepare("SELECT group_name FROM res WHERE hotel_name = :hotel_name AND floor = :floor AND room_num = :room_num ORDER BY date(end_date) DESC, id DESC LIMIT 1");
         $stmt->execute([
