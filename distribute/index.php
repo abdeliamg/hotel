@@ -1091,6 +1091,79 @@ require_once __DIR__ . '/../includes/root_nav.php';
     <span class="fab-badge" id="fabCount"></span>
 </button>
 
+<!-- Export rooms modal -->
+<div class="modal fade" id="exportRoomsModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header" style="background: linear-gradient(135deg, #0f172a 0%, #16a34a 100%); color: #fff;">
+                <h5 class="modal-title"><i class="bi bi-download"></i> تصدير الغرف</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small mb-3">
+                    اختر الفندق ثم تاريخ البداية لاستخراج الطابق وتاريخي البداية والنهاية من قاعدة البيانات لكل غرفة.
+                    سيتم استخراج التكتل (master_group) تلقائيًا من جدول المجموعات.
+                </p>
+
+                <div class="row g-3">
+                    <div class="col-md-7">
+                        <label class="form-label fw-bold" for="exportHotel">
+                            <i class="bi bi-building"></i> الفندق
+                        </label>
+                        <select class="form-select" id="exportHotel">
+                            <option value="">اختر فندقًا</option>
+                        </select>
+                    </div>
+                    <div class="col-md-5">
+                        <label class="form-label fw-bold" for="exportDateFrom">
+                            <i class="bi bi-calendar-event"></i> تاريخ البداية
+                        </label>
+                        <select class="form-select" id="exportDateFrom" disabled>
+                            <option value="">اختر الفندق أولًا</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="mt-3 d-flex align-items-center gap-2">
+                    <span id="exportRoomsStatus" class="text-muted small"></span>
+                </div>
+
+                <hr>
+
+                <div class="table-responsive" style="max-height: 320px;">
+                    <table class="table table-sm table-hover align-middle">
+                        <thead class="table-light" style="position: sticky; top: 0;">
+                            <tr>
+                                <th>#</th>
+                                <th>رقم الغرفة</th>
+                                <th>الطابق</th>
+                                <th>من</th>
+                                <th>إلى</th>
+                            </tr>
+                        </thead>
+                        <tbody id="exportRoomsPreviewBody">
+                            <tr><td colspan="5" class="text-center text-muted py-4">
+                                اختر الفندق وتاريخ البداية لمعاينة الغرف المرتبطة
+                            </td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary me-auto" id="btnExportSkip">
+                    <i class="bi bi-skip-forward"></i> تصدير بدون بيانات الفندق
+                </button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                    <i class="bi bi-x-circle"></i> إلغاء
+                </button>
+                <button type="button" class="btn btn-success" id="btnExportConfirm" disabled>
+                    <i class="bi bi-download"></i> تصدير
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Auto-fill rooms modal -->
 <div class="modal fade" id="autoFillRoomsModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">

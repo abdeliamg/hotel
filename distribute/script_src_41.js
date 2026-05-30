@@ -1089,12 +1089,75 @@ function fetchMasterGroupsFromDB(groupNames) {
         });
 }
 
-function exportCSV() {
-    if (state.assignedRows.length === 0 && state.unassignedRooms.length === 0) {
-        showToast('لا توجد بيانات للتصدير. قم بالتوزيع أولاً.', 'warning');
-        return;
-    }
+function fetchRoomsByHotelDate(hotel, dateFrom) {
+    if (!hotel || !dateFrom) return Promise.resolve([]);
+    const url = 'get_rooms_by_hotel_date.php?hotel=' + encodeURIComponent(hotel)
+        + '&date_from=' + encodeURIComponent(dateFrom);
+    return fetch(url, { credentials: 'same-origin' })
+        .then(r => r.json())
+        .then(data => (data && data.status === 'ok' && Array.isArray(data.results)) ? data.results : [])
+        .catch(err => {
+            console.warn('Failed to fetch rooms for export:', err);
+            return [];
+        });
+}
 
+// CSV column order (always 6 columns):
+// group_name; master_group; floor; room_num; date_from; date_to
+function buildExportCSV(mgMap, roomMap) {
+    const resolveMg = name => {
+        if (!name) return '';
+        if (Object.prototype.hasOwnProperty.call(mgMap, name)) return mgMap[name] || '';
+        return '';
+    };
+    const roomInfo = num => {
+        if (!num) return {};
+        return roomMap[num] || roomMap[String(num)] || {};
+    };
+
+    let csv = '\uFEFF';
+    const header = 'group_name;master_group;floor;room_num;date_from;date_to\n';
+    csv += header;
+
+    for (const row of state.assignedRows) {
+        const mg = resolveMg(row.groupName) || row.masterGroup || '';
+        const info = roomInfo(row.roomNumber);
+        const floor = (info.floor !== undefined && info.floor !== null && info.floor !== '')
+            ? info.floor
+            : (row.floor !== undefined && row.floor !== null ? row.floor : '');
+        csv += `${row.groupName};${mg};${floor};${row.roomNumber};${info.date_from || ''};${info.date_to || ''}\n`;
+    }
+    for (const row of state.unassignedRooms) {
+        const info = roomInfo(row.roomNumber);
+        const floor = (info.floor !== undefined && info.floor !== null && info.floor !== '')
+            ? info.floor
+            : (row.floor !== undefined && row.floor !== null ? row.floor : '');
+        csv += `غير مخصصة;;${floor};${row.roomNumber};${info.date_from || ''};${info.date_to || ''}\n`;
+    }
+    if (state.unassignedGroups.length > 0) {
+        csv += '\n' + header;
+        for (const g of state.unassignedGroups) {
+            const mg = resolveMg(g.groupName) || g.masterGroup || '';
+            // No room data for unassigned groups; room-column placeholder marks them.
+            csv += `${g.groupName}(${g.remaining});${mg};;GROUP_UNASSIGNED;;\n`;
+        }
+    }
+    return csv;
+}
+
+function triggerCSVDownload(csv) {
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `توزيع_الغرف_${formatDateForFile(new Date())}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
+
+function performExport({ hotel, dateFrom, skipRoomLookup }) {
     const wasDisabled = els.btnExport.disabled;
     els.btnExport.disabled = true;
 
@@ -1102,45 +1165,220 @@ function exportCSV() {
     for (const row of state.assignedRows) if (row.groupName) groupNames.push(row.groupName);
     for (const g of state.unassignedGroups) if (g.groupName) groupNames.push(g.groupName);
 
-    fetchMasterGroupsFromDB(groupNames).then(mgMap => {
-        const resolveMg = name => {
-            if (!name) return '';
-            if (Object.prototype.hasOwnProperty.call(mgMap, name)) return mgMap[name] || '';
-            return '';
-        };
+    const mgPromise = fetchMasterGroupsFromDB(groupNames);
+    const roomsPromise = skipRoomLookup
+        ? Promise.resolve([])
+        : fetchRoomsByHotelDate(hotel, dateFrom);
 
-        let csv = '\uFEFF';
-        const header = 'room_num;room_type;group_name;master_group\n';
-        csv += header;
-
-        for (const row of state.assignedRows) {
-            const mg = resolveMg(row.groupName) || row.masterGroup || '';
-            csv += `${row.roomNumber};${row.type};${row.groupName};${mg}\n`;
-        }
-        for (const row of state.unassignedRooms) {
-            csv += `${row.roomNumber};${row.type};غير مخصصة;\n`;
-        }
-        if (state.unassignedGroups.length > 0) {
-            csv += '\n' + header;
-            for (const g of state.unassignedGroups) {
-                const mg = resolveMg(g.groupName) || g.masterGroup || '';
-                csv += `GROUP_UNASSIGNED;${g.type};${g.groupName}(${g.remaining});${mg}\n`;
+    return Promise.all([mgPromise, roomsPromise])
+        .then(([mgMap, rooms]) => {
+            const roomMap = {};
+            for (const r of rooms) {
+                if (r && r.room_num !== undefined && r.room_num !== null) {
+                    roomMap[String(r.room_num)] = r;
+                }
             }
-        }
+            const csv = buildExportCSV(mgMap, roomMap);
+            triggerCSVDownload(csv);
+            const msg = skipRoomLookup
+                ? 'تم تصدير الملف (بدون بيانات الفندق)'
+                : 'تم تصدير الملف';
+            showToast(msg, 'success');
+            return true;
+        })
+        .catch(err => {
+            console.error('Export failed:', err);
+            showToast('فشل التصدير', 'danger');
+            return false;
+        })
+        .finally(() => {
+            els.btnExport.disabled = wasDisabled;
+        });
+}
 
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `توزيع_الغرف_${formatDateForFile(new Date())}.csv`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        showToast('تم تصدير الملف', 'success');
-    }).finally(() => {
-        els.btnExport.disabled = wasDisabled;
+function exportCSV() {
+    if (state.assignedRows.length === 0 && state.unassignedRooms.length === 0) {
+        showToast('لا توجد بيانات للتصدير. قم بالتوزيع أولاً.', 'warning');
+        return;
+    }
+    openExportModal();
+}
+
+// ============================================================================
+// Export modal (hotel + date_from picker + room preview)
+// ============================================================================
+
+let exportModalInitialized = false;
+let exportPreviewRows = [];
+
+function initExportModal() {
+    if (exportModalInitialized) return;
+    const modalEl = document.getElementById('exportRoomsModal');
+    if (!modalEl || typeof bootstrap === 'undefined' || typeof window.jQuery === 'undefined') return;
+
+    const $hotel = window.jQuery('#exportHotel');
+    const dateEl = document.getElementById('exportDateFrom');
+    const statusEl = document.getElementById('exportRoomsStatus');
+    const tbody = document.getElementById('exportRoomsPreviewBody');
+    const btnConfirm = document.getElementById('btnExportConfirm');
+    const btnSkip = document.getElementById('btnExportSkip');
+
+    $hotel.select2({
+        placeholder: 'ابحث عن فندق...',
+        width: '100%',
+        dir: 'rtl',
+        theme: 'bootstrap-5',
+        dropdownParent: window.jQuery('#exportRoomsModal'),
+        ajax: {
+            url: '../res_hotels.php',
+            dataType: 'json',
+            delay: 250,
+            data: params => ({ q: params.term || '', page: params.page || 1 }),
+            processResults: (data, params) => {
+                params.page = params.page || 1;
+                return {
+                    results: data.results || [],
+                    pagination: { more: !!(data.pagination && data.pagination.more) },
+                };
+            },
+        },
     });
+
+    function resetDates(placeholder) {
+        dateEl.innerHTML = '<option value="">' + escapeHtml(placeholder || 'اختر تاريخًا...') + '</option>';
+        dateEl.disabled = true;
+        btnConfirm.disabled = true;
+        exportPreviewRows = [];
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">'
+            + 'اختر الفندق وتاريخ البداية لمعاينة الغرف المرتبطة'
+            + '</td></tr>';
+        statusEl.textContent = '';
+    }
+
+    function loadRoomsPreview() {
+        const hotel = $hotel.val();
+        const date = dateEl.value;
+        if (!hotel || !date) {
+            btnConfirm.disabled = true;
+            return;
+        }
+        statusEl.textContent = 'جارٍ تحميل الغرف...';
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3"><div class="spinner-border spinner-border-sm"></div> جارٍ التحميل...</td></tr>';
+        btnConfirm.disabled = true;
+
+        fetchRoomsByHotelDate(hotel, date).then(rooms => {
+            exportPreviewRows = rooms;
+            if (rooms.length === 0) {
+                statusEl.textContent = '';
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">'
+                    + 'لا توجد غرف مطابقة'
+                    + '</td></tr>';
+                btnConfirm.disabled = true;
+                return;
+            }
+            const frag = document.createDocumentFragment();
+            rooms.forEach((r, i) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML =
+                    '<td>' + (i + 1) + '</td>'
+                    + '<td><strong>' + escapeHtml(r.room_num) + '</strong></td>'
+                    + '<td>' + escapeHtml(r.floor) + '</td>'
+                    + '<td>' + escapeHtml(r.date_from || '') + '</td>'
+                    + '<td>' + escapeHtml(r.date_to || '') + '</td>';
+                frag.appendChild(tr);
+            });
+            tbody.innerHTML = '';
+            tbody.appendChild(frag);
+            statusEl.textContent = 'تم تحميل ' + rooms.length + ' غرفة. جاهز للتصدير.';
+            btnConfirm.disabled = false;
+        });
+    }
+
+    $hotel.on('change', () => {
+        const hotel = $hotel.val();
+        if (!hotel) { resetDates('اختر الفندق أولًا'); return; }
+
+        statusEl.textContent = 'جارٍ تحميل التواريخ المتاحة...';
+        dateEl.disabled = true;
+        dateEl.innerHTML = '<option value="">جارٍ التحميل...</option>';
+        btnConfirm.disabled = true;
+        exportPreviewRows = [];
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3"><div class="spinner-border spinner-border-sm"></div> جارٍ تحميل التواريخ...</td></tr>';
+
+        fetch('get_hotel_dates.php?hotel=' + encodeURIComponent(hotel), { credentials: 'same-origin' })
+            .then(r => r.json())
+            .then(data => {
+                if (!data || data.status !== 'ok' || !Array.isArray(data.results)) {
+                    throw new Error((data && data.message) || 'فشل تحميل التواريخ');
+                }
+                if (data.results.length === 0) {
+                    resetDates('لا توجد تواريخ متاحة لهذا الفندق');
+                    statusEl.textContent = '';
+                    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">'
+                        + 'لا توجد غرف مسجلة لهذا الفندق'
+                        + '</td></tr>';
+                    return;
+                }
+                const opts = ['<option value="">اختر تاريخًا...</option>'];
+                for (const row of data.results) {
+                    const v = row.date_from || '';
+                    const c = row.room_count !== undefined ? (' (' + row.room_count + ' غرفة)') : '';
+                    opts.push('<option value="' + escapeHtml(v) + '">' + escapeHtml(v) + c + '</option>');
+                }
+                dateEl.innerHTML = opts.join('');
+                dateEl.disabled = false;
+                statusEl.textContent = 'اختر تاريخًا لمعاينة الغرف';
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">'
+                    + 'اختر تاريخ البداية لمعاينة الغرف'
+                    + '</td></tr>';
+            })
+            .catch(err => {
+                console.warn(err);
+                resetDates('فشل التحميل');
+                statusEl.textContent = 'تعذر تحميل التواريخ';
+            });
+    });
+
+    dateEl.addEventListener('change', loadRoomsPreview);
+
+    btnConfirm.addEventListener('click', () => {
+        const hotel = $hotel.val();
+        const date = dateEl.value;
+        if (!hotel || !date) {
+            showToast('اختر الفندق وتاريخ البداية', 'warning');
+            return;
+        }
+        const bsModal = bootstrap.Modal.getInstance(modalEl);
+        performExport({ hotel, dateFrom: date, skipRoomLookup: false }).then(() => {
+            if (bsModal) bsModal.hide();
+        });
+    });
+
+    btnSkip.addEventListener('click', () => {
+        const bsModal = bootstrap.Modal.getInstance(modalEl);
+        performExport({ hotel: '', dateFrom: '', skipRoomLookup: true }).then(() => {
+            if (bsModal) bsModal.hide();
+        });
+    });
+
+    modalEl.addEventListener('hidden.bs.modal', () => {
+        // Keep hotel selection across opens; only reset transient state.
+        statusEl.textContent = '';
+    });
+
+    exportModalInitialized = true;
+}
+
+function openExportModal() {
+    const modalEl = document.getElementById('exportRoomsModal');
+    if (!modalEl || typeof bootstrap === 'undefined') {
+        // Fallback: export with empty hotel data so the button still works.
+        performExport({ hotel: '', dateFrom: '', skipRoomLookup: true });
+        return;
+    }
+    initExportModal();
+    const bsModal = bootstrap.Modal.getOrCreateInstance(modalEl);
+    bsModal.show();
 }
 
 // ============================================================================
