@@ -1102,9 +1102,10 @@ function fetchRoomsByHotelDate(hotel, dateFrom) {
         });
 }
 
-// CSV column order (always 6 columns):
-// group_name; master_group; floor; room_num; date_from; date_to
-function buildExportCSV(mgMap, roomMap) {
+// Column order (always 7 columns):
+// hotel_name; group_name; master_group; floor; room_num; date_from; date_to
+// Returns an array-of-arrays (first row = header) suitable for SheetJS.
+function buildExportRows(mgMap, roomMap, hotelName) {
     const resolveMg = name => {
         if (!name) return '';
         if (Object.prototype.hasOwnProperty.call(mgMap, name)) return mgMap[name] || '';
@@ -1114,47 +1115,58 @@ function buildExportCSV(mgMap, roomMap) {
         if (!num) return {};
         return roomMap[num] || roomMap[String(num)] || {};
     };
+    const resolveFloor = (info, row) => {
+        if (info.floor !== undefined && info.floor !== null && info.floor !== '') return info.floor;
+        if (row && row.floor !== undefined && row.floor !== null) return row.floor;
+        return '';
+    };
+    const hotel = hotelName || '';
 
-    let csv = '\uFEFF';
-    const header = 'group_name;master_group;floor;room_num;date_from;date_to\n';
-    csv += header;
+    const header = ['الفندق', 'المجموعة', 'التكتل', 'الطابق', 'رقم الغرفة', 'تاريخ البداية', 'تاريخ النهاية'];
+    const rows = [header];
 
     for (const row of state.assignedRows) {
         const mg = resolveMg(row.groupName) || row.masterGroup || '';
         const info = roomInfo(row.roomNumber);
-        const floor = (info.floor !== undefined && info.floor !== null && info.floor !== '')
-            ? info.floor
-            : (row.floor !== undefined && row.floor !== null ? row.floor : '');
-        csv += `${row.groupName};${mg};${floor};${row.roomNumber};${info.date_from || ''};${info.date_to || ''}\n`;
+        rows.push([hotel, row.groupName, mg, resolveFloor(info, row), row.roomNumber, info.date_from || '', info.date_to || '']);
     }
     for (const row of state.unassignedRooms) {
         const info = roomInfo(row.roomNumber);
-        const floor = (info.floor !== undefined && info.floor !== null && info.floor !== '')
-            ? info.floor
-            : (row.floor !== undefined && row.floor !== null ? row.floor : '');
-        csv += `غير مخصصة;;${floor};${row.roomNumber};${info.date_from || ''};${info.date_to || ''}\n`;
+        rows.push([hotel, 'غير مخصصة', '', resolveFloor(info, row), row.roomNumber, info.date_from || '', info.date_to || '']);
     }
     if (state.unassignedGroups.length > 0) {
-        csv += '\n' + header;
+        // Blank separator row, then a repeated header for the unassigned block.
+        rows.push([]);
+        rows.push(header);
         for (const g of state.unassignedGroups) {
             const mg = resolveMg(g.groupName) || g.masterGroup || '';
-            // No room data for unassigned groups; room-column placeholder marks them.
-            csv += `${g.groupName}(${g.remaining});${mg};;GROUP_UNASSIGNED;;\n`;
+            rows.push([hotel, `${g.groupName}(${g.remaining})`, mg, '', 'GROUP_UNASSIGNED', '', '']);
         }
     }
-    return csv;
+    return rows;
 }
 
-function triggerCSVDownload(csv) {
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `توزيع_الغرف_${formatDateForFile(new Date())}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+function triggerXLSXDownload(rows) {
+    if (typeof XLSX === 'undefined') {
+        showToast('تعذّر تحميل مكتبة التصدير (XLSX)', 'danger');
+        throw new Error('XLSX library not loaded');
+    }
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    // Render the sheet right-to-left to match the Arabic content.
+    ws['!sheetViews'] = [{ RTL: true }];
+    // Reasonable column widths for the 7 columns.
+    ws['!cols'] = [
+        { wch: 24 }, // hotel_name
+        { wch: 22 }, // group_name
+        { wch: 18 }, // master_group
+        { wch: 8 },  // floor
+        { wch: 12 }, // room_num
+        { wch: 14 }, // date_from
+        { wch: 14 }, // date_to
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'التوزيع');
+    XLSX.writeFile(wb, `توزيع_الغرف_${formatDateForFile(new Date())}.xlsx`);
 }
 
 function performExport({ hotel, dateFrom, skipRoomLookup }) {
@@ -1178,8 +1190,8 @@ function performExport({ hotel, dateFrom, skipRoomLookup }) {
                     roomMap[String(r.room_num)] = r;
                 }
             }
-            const csv = buildExportCSV(mgMap, roomMap);
-            triggerCSVDownload(csv);
+            const rows = buildExportRows(mgMap, roomMap, hotel || '');
+            triggerXLSXDownload(rows);
             const msg = skipRoomLookup
                 ? 'تم تصدير الملف (بدون بيانات الفندق)'
                 : 'تم تصدير الملف';
@@ -1356,7 +1368,10 @@ function initExportModal() {
 
     btnSkip.addEventListener('click', () => {
         const bsModal = bootstrap.Modal.getInstance(modalEl);
-        performExport({ hotel: '', dateFrom: '', skipRoomLookup: true }).then(() => {
+        // Carry the currently-selected hotel (if any) into the first column;
+        // we only skip the room-data lookup, not the hotel label.
+        const selectedHotel = $hotel.val() || '';
+        performExport({ hotel: selectedHotel, dateFrom: '', skipRoomLookup: true }).then(() => {
             if (bsModal) bsModal.hide();
         });
     });
