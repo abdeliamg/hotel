@@ -1103,7 +1103,7 @@ function fetchRoomsByHotelDate(hotel, dateFrom) {
 }
 
 // Column order (always 7 columns):
-// hotel_name; group_name; master_group; floor; room_num; date_from; date_to
+// group_name; hotel_name; floor; room_num; master_group; date_from; date_to
 // Returns an array-of-arrays (first row = header) suitable for SheetJS.
 function buildExportRows(mgMap, roomMap, hotelName) {
     const resolveMg = name => {
@@ -1122,17 +1122,17 @@ function buildExportRows(mgMap, roomMap, hotelName) {
     };
     const hotel = hotelName || '';
 
-    const header = ['الفندق', 'المجموعة', 'التكتل', 'الطابق', 'رقم الغرفة', 'تاريخ البداية', 'تاريخ النهاية'];
+    const header = ['المجموعة', 'الفندق', 'الطابق', 'رقم الغرفة', 'التكتل', 'تاريخ البداية', 'تاريخ النهاية'];
     const rows = [header];
 
     for (const row of state.assignedRows) {
         const mg = resolveMg(row.groupName) || row.masterGroup || '';
         const info = roomInfo(row.roomNumber);
-        rows.push([hotel, row.groupName, mg, resolveFloor(info, row), row.roomNumber, info.date_from || '', info.date_to || '']);
+        rows.push([row.groupName, hotel, resolveFloor(info, row), row.roomNumber, mg, info.date_from || '', info.date_to || '']);
     }
     for (const row of state.unassignedRooms) {
         const info = roomInfo(row.roomNumber);
-        rows.push([hotel, 'غير مخصصة', '', resolveFloor(info, row), row.roomNumber, info.date_from || '', info.date_to || '']);
+        rows.push(['غير مخصصة', hotel, resolveFloor(info, row), row.roomNumber, '', info.date_from || '', info.date_to || '']);
     }
     if (state.unassignedGroups.length > 0) {
         // Blank separator row, then a repeated header for the unassigned block.
@@ -1140,7 +1140,7 @@ function buildExportRows(mgMap, roomMap, hotelName) {
         rows.push(header);
         for (const g of state.unassignedGroups) {
             const mg = resolveMg(g.groupName) || g.masterGroup || '';
-            rows.push([hotel, `${g.groupName}(${g.remaining})`, mg, '', 'GROUP_UNASSIGNED', '', '']);
+            rows.push([`${g.groupName}(${g.remaining})`, hotel, '', 'GROUP_UNASSIGNED', mg, '', '']);
         }
     }
     return rows;
@@ -1154,11 +1154,11 @@ function triggerXLSXDownload(rows) {
     const ws = XLSX.utils.aoa_to_sheet(rows);
     // Reasonable column widths for the 7 columns.
     ws['!cols'] = [
-        { wch: 24 }, // hotel_name
         { wch: 22 }, // group_name
-        { wch: 18 }, // master_group
+        { wch: 24 }, // hotel_name
         { wch: 8 },  // floor
         { wch: 12 }, // room_num
+        { wch: 18 }, // master_group
         { wch: 14 }, // date_from
         { wch: 14 }, // date_to
     ];
