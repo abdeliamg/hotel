@@ -1477,7 +1477,26 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
                         }
                         normalizedBulkRows = r.normalized_rows_text || '';
                         if (Array.isArray(r.errors) && r.errors.length > 0) {
-                            Swal.fire({icon:'warning', title:'التحقق اكتمل مع أخطاء', text:`عدد الصفوف المتأثرة: ${r.errors.length}`});
+                            const escapeHtml = (s) => $('<div>').text(s == null ? '' : String(s)).html();
+                            const rowsHtml = r.errors.map(function(er){
+                                return `<tr>
+                                    <td style="white-space:nowrap;font-weight:600">سطر ${escapeHtml(er.row)}</td>
+                                    <td style="text-align:right">${escapeHtml(er.message)}</td>
+                                </tr>`;
+                            }).join('');
+                            Swal.fire({
+                                icon: 'warning',
+                                title: 'التحقق اكتمل مع وجود أخطاء',
+                                html: `<div class="mb-2 text-muted">عدد الصفوف المتأثرة: <strong>${r.errors.length}</strong> من ${r.count || 0}. صحّح الأخطاء التالية ثم أعد التحقق:</div>
+                                       <div style="max-height:320px;overflow:auto">
+                                         <table class="table table-sm table-bordered mb-0" style="direction:rtl">
+                                           <thead><tr><th style="white-space:nowrap">الصف</th><th>الخطأ</th></tr></thead>
+                                           <tbody>${rowsHtml}</tbody>
+                                         </table>
+                                       </div>`,
+                                width: 640,
+                                confirmButtonText: 'حسناً'
+                            });
                             return;
                         }
                         $('#processBulkBtn').prop('disabled', false);
