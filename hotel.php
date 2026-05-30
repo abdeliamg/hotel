@@ -351,7 +351,7 @@ function note_as_safe_href(string $note): ?string {
                         <td><?= e((string)$hotel['total_beds']) ?></td>
                         <td class="detail-clickable" data-detail="reserved" title="عرض الغرف المحجوزة"><?= e((string)$hotel['reserved_rooms']) ?></td>
                         <td class="detail-clickable" data-detail="available" title="عرض الغرف المتاحة"><?= e((string)$hotel['available_rooms']) ?></td>
-                        <td title="غرف محجوزة لا يوجد بها أي حاج"><?= e((string)$hotel['reserved_empty_rooms']) ?></td>
+                        <td class="detail-clickable" data-detail="reserved_empty" title="عرض الغرف المحجوزة المتاحة"><?= e((string)$hotel['reserved_empty_rooms']) ?></td>
                         <td><?= e((string)$hotel['available_beds']) ?></td>
                         <td class="detail-clickable" data-detail="pilgrims" title="عرض الحجاج"><?= e((string)$hotel['pilgrims_count']) ?></td>
                         <?php if ($isHotelAdmin): ?>
@@ -660,6 +660,10 @@ function note_as_safe_href(string $note): ?string {
                     url = 'hotel_not_available_room.php';
                     title = 'الغرف المحجوزة - ' + hotelName;
                     render = renderReservedRooms;
+                } else if (kind === 'reserved_empty') {
+                    url = 'hotel_reserved_empty_room.php';
+                    title = 'الغرف المحجوزة المتاحة - ' + hotelName;
+                    render = renderReservedEmptyRooms;
                 } else if (kind === 'pilgrims') {
                     url = 'hotel_assigned_pilgrims.php';
                     title = 'الحجاج - ' + hotelName;
@@ -719,6 +723,21 @@ function note_as_safe_href(string $note): ?string {
                     html += `<li class="list-group-item d-flex justify-content-between">
                                 <span>رقم الغرفة: <strong>${esc(r.room_num)}</strong></span>
                                 <span>المجموعة: ${esc(r.group_name)}</span>
+                             </li>`;
+                });
+                html += '</ul>';
+                return html;
+            }
+
+            function renderReservedEmptyRooms(rooms) {
+                if (!rooms.length) return '<div class="text-center text-muted py-3">لا توجد غرف محجوزة بدون حجاج</div>';
+                const roomNumbers = rooms.map(r => esc(r.room_num)).join('، ');
+                let html = `<div class="mb-3"><strong>أرقام الغرف (${rooms.length}):</strong><br>${roomNumbers}</div>`;
+                html += '<ul class="list-group">';
+                rooms.forEach(r => {
+                    html += `<li class="list-group-item d-flex justify-content-between">
+                                <span>رقم الغرفة: <strong>${esc(r.room_num)}</strong></span>
+                                <span>المجموعة: ${esc(r.group_name)} | النوع: ${esc(r.room_type)}</span>
                              </li>`;
                 });
                 html += '</ul>';
