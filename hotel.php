@@ -1,33 +1,4 @@
 <?php
-// TEMP DIAGNOSTIC: write any error to a plain file so we can read it directly
-// over the web — the host swallows 500 responses and buffered output.
-$__diagFile = __DIR__ . '/hotel_debug.log';
-@file_put_contents($__diagFile, "[" . date('c') . "] hotel.php entered\n", FILE_APPEND);
-
-set_error_handler(function ($severity, $message, $file, $line) use ($__diagFile) {
-    @file_put_contents($__diagFile, "[" . date('c') . "] ERROR sev=$severity $message in $file:$line\n", FILE_APPEND);
-    return false;
-});
-set_exception_handler(function ($ex) use ($__diagFile) {
-    @file_put_contents($__diagFile, "[" . date('c') . "] EXCEPTION " . $ex->getMessage() . "\n" . $ex->getTraceAsString() . "\n", FILE_APPEND);
-    while (ob_get_level()) { @ob_end_clean(); }
-    http_response_code(200);
-    header('Content-Type: text/plain; charset=utf-8');
-    echo "EXCEPTION:\n" . $ex->getMessage() . "\nin " . $ex->getFile() . ':' . $ex->getLine() . "\n";
-    exit;
-});
-register_shutdown_function(function () use ($__diagFile) {
-    $e = error_get_last();
-    if ($e && in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_RECOVERABLE_ERROR], true)) {
-        @file_put_contents($__diagFile, "[" . date('c') . "] FATAL " . $e['message'] . " in " . $e['file'] . ':' . $e['line'] . "\n", FILE_APPEND);
-        while (ob_get_level()) { @ob_end_clean(); }
-        if (!headers_sent()) {
-            http_response_code(200);
-            header('Content-Type: text/plain; charset=utf-8');
-        }
-        echo "\n\nFATAL DIAGNOSTIC:\n" . $e['message'] . "\nin " . $e['file'] . ':' . $e['line'] . "\n";
-    }
-});
 session_start();
 require_once __DIR__ . '/check.php';
 require_once __DIR__ . '/includes/root_nav.php';
@@ -174,7 +145,6 @@ if ($action === 'delete') {
 }
 
 // Listing query (Q1: DATE('now', 'localtime') everywhere)
-try {
 $stmt = $pdo->query("WITH
 ActiveRooms AS (
     SELECT r.hotel_name, r.room_num, r.room_type
@@ -230,7 +200,7 @@ RoomPilgrimCounts AS (
 ReservedIncompleteRooms AS (
     -- Reserved (active) rooms that are PARTIALLY filled: they have at least one
     -- pilgrim but fewer than the room capacity (room_type). Fully empty rooms are
-    -- excluded (those are counted separately as "reserved available").
+    -- excluded (those are counted separately as reserved-available).
     SELECT ar.hotel_name,
            COUNT(ar.room_num) AS reserved_incomplete_rooms
     FROM ActiveReservations ar
@@ -266,18 +236,6 @@ LEFT JOIN ReservedIncompleteRooms rir ON h.hotel_name = rir.hotel_name
 LEFT JOIN PilgrimsCount           pc  ON h.hotel_name = pc.hotel_name;
 ");
 $hotels = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Throwable $ex) {
-    error_log('hotel listing query failed: ' . $ex->getMessage());
-    // Return 200 on purpose so the host does not replace the body with a
-    // generic 500 page — we want the actual message to be visible.
-    http_response_code(200);
-    header('Content-Type: text/html; charset=utf-8');
-    echo '<pre dir="ltr" style="white-space:pre-wrap;color:#b91c1c;font-family:monospace;padding:16px">'
-        . 'HOTEL LISTING QUERY ERROR:' . "\n"
-        . htmlspecialchars($ex->getMessage(), ENT_QUOTES, 'UTF-8')
-        . '</pre>';
-    exit;
-}
 
 $csrf = generate_csrf_token();
 
