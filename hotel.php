@@ -1,9 +1,26 @@
 <?php
-// TEMP DIAGNOSTIC: surface any fatal (incl. errors inside included files) with a
-// 200 status so the host's generic 500 page does not hide the real message.
-register_shutdown_function(function () {
+// TEMP DIAGNOSTIC: write any error to a plain file so we can read it directly
+// over the web — the host swallows 500 responses and buffered output.
+$__diagFile = __DIR__ . '/hotel_debug.log';
+@file_put_contents($__diagFile, "[" . date('c') . "] hotel.php entered\n", FILE_APPEND);
+
+set_error_handler(function ($severity, $message, $file, $line) use ($__diagFile) {
+    @file_put_contents($__diagFile, "[" . date('c') . "] ERROR sev=$severity $message in $file:$line\n", FILE_APPEND);
+    return false;
+});
+set_exception_handler(function ($ex) use ($__diagFile) {
+    @file_put_contents($__diagFile, "[" . date('c') . "] EXCEPTION " . $ex->getMessage() . "\n" . $ex->getTraceAsString() . "\n", FILE_APPEND);
+    while (ob_get_level()) { @ob_end_clean(); }
+    http_response_code(200);
+    header('Content-Type: text/plain; charset=utf-8');
+    echo "EXCEPTION:\n" . $ex->getMessage() . "\nin " . $ex->getFile() . ':' . $ex->getLine() . "\n";
+    exit;
+});
+register_shutdown_function(function () use ($__diagFile) {
     $e = error_get_last();
     if ($e && in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_RECOVERABLE_ERROR], true)) {
+        @file_put_contents($__diagFile, "[" . date('c') . "] FATAL " . $e['message'] . " in " . $e['file'] . ':' . $e['line'] . "\n", FILE_APPEND);
+        while (ob_get_level()) { @ob_end_clean(); }
         if (!headers_sent()) {
             http_response_code(200);
             header('Content-Type: text/plain; charset=utf-8');
