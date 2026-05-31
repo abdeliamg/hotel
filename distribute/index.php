@@ -1,6 +1,12 @@
 <?php
 require_once __DIR__ . '/../check.php';
 require_once __DIR__ . '/../includes/root_nav.php';
+
+// Only admins may edit the shared fallback rules; everyone else sees them
+// read-only. Mirror the same role check used by save_fallback_rules.php.
+$__current_user = $GLOBALS['current_user'] ?? null;
+$canEditFallbackRules = $__current_user
+    && role_meets_requirement($__current_user['role'] ?? '', 'admin');
 ?>
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -437,6 +443,26 @@ require_once __DIR__ . '/../includes/root_nav.php';
         }
 
         .fallback-rules .fr-toggle i { transition: transform 0.2s; }
+
+        /* Read-only mode for non-admin users: keep rules visible but block
+           interaction with every input/button rendered by the script. */
+        .fallback-rules.fr-readonly .fr-list,
+        .fallback-rules.fr-readonly .fr-save-bar button {
+            pointer-events: none;
+            user-select: none;
+        }
+        .fallback-rules.fr-readonly .fr-list {
+            opacity: 0.85;
+            filter: grayscale(0.15);
+        }
+        .fallback-rules.fr-readonly .fr-list input,
+        .fallback-rules.fr-readonly .fr-list select,
+        .fallback-rules.fr-readonly .fr-list button,
+        .fallback-rules.fr-readonly .fr-list textarea {
+            background-color: #f8fafc !important;
+            color: #475569 !important;
+            cursor: not-allowed !important;
+        }
 
         .fr-subhead {
             display: flex;
@@ -930,15 +956,40 @@ require_once __DIR__ . '/../includes/root_nav.php';
                 </div>
             </div>
 
-            <div class="fallback-rules collapsed" id="fallbackRules">
+            <?php if (!$canEditFallbackRules): ?>
+            <script>
+            // Non-admin lockdown: the obfuscated/external script re-renders the
+            // rules list whenever fallback rules change. Disable every input and
+            // button inside the list each time the DOM updates, so users cannot
+            // tab into a field and edit it with the keyboard.
+            document.addEventListener('DOMContentLoaded', function () {
+                const list = document.getElementById('fallbackRulesList');
+                if (!list) return;
+                function lockNodes(root) {
+                    root.querySelectorAll('input, select, textarea, button').forEach(function (el) {
+                        el.disabled = true;
+                        el.setAttribute('tabindex', '-1');
+                        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+                            el.readOnly = true;
+                        }
+                    });
+                }
+                lockNodes(list);
+                new MutationObserver(function () { lockNodes(list); })
+                    .observe(list, { childList: true, subtree: true });
+            });
+            </script>
+            <?php endif; ?>
+            <div class="fallback-rules collapsed<?= $canEditFallbackRules ? '' : ' fr-readonly' ?>" id="fallbackRules" data-can-edit="<?= $canEditFallbackRules ? '1' : '0' ?>">
                 <div class="fr-head">
-                    <h6><i class="bi bi-arrow-left-right"></i> قواعد البدائل بين أنواع الغرف</h6>
+                    <h6><i class="bi bi-arrow-left-right"></i> قواعد البدائل بين أنواع الغرف<?= $canEditFallbackRules ? '' : ' <span class="badge bg-secondary fw-normal ms-2">للقراءة فقط</span>' ?></h6>
                     <button type="button" class="fr-toggle" id="btnToggleFallbackRules" aria-label="تبديل">
                         <i class="bi bi-chevron-down"></i>
                     </button>
                 </div>
                 <div class="fr-body" id="fallbackRulesBody">
                     <div class="fr-subhead">
+                        <?php if ($canEditFallbackRules): ?>
                         <div class="fr-actions">
                             <button type="button" class="btn btn-outline-primary btn-sm" id="btnAddFallbackRule">
                                 <i class="bi bi-plus-lg"></i> إضافة قاعدة
@@ -947,10 +998,14 @@ require_once __DIR__ . '/../includes/root_nav.php';
                                 <i class="bi bi-arrow-counterclockwise"></i> الافتراضي
                             </button>
                         </div>
+                        <?php endif; ?>
                         <div class="fr-hint">
                             حدّد لكل نوع غرفة "بدائل" يمكن استخدامها لتغطية وحدة طلب واحدة عند نفاد النوع المطلوب. كل بديل عبارة عن (عدد) × (نوع).
                             مثلًا: لتغطية وحدة من نوع 4، يمكن استخدام بديل <code>2 × نوع 2</code> (غرفتان من النوع 2).
                             يتطلب تفعيل خيار "السماح بترقية النوع" أعلاه. القواعد محفوظة على الخادم ومشتركة بين جميع المستخدمين.
+                            <?php if (!$canEditFallbackRules): ?>
+                            <div class="text-muted mt-1"><i class="bi bi-info-circle"></i> صلاحيات تعديل هذه القواعد متاحة للمدير فقط.</div>
+                            <?php endif; ?>
                         </div>
                     </div>
                     <div class="fr-list" id="fallbackRulesList"></div>
@@ -958,9 +1013,11 @@ require_once __DIR__ . '/../includes/root_nav.php';
                         <span class="fr-status" id="fallbackRulesStatus">
                             <i class="bi bi-cloud-arrow-down"></i> جارٍ تحميل القواعد من الخادم...
                         </span>
+                        <?php if ($canEditFallbackRules): ?>
                         <button type="button" class="btn btn-success btn-sm" id="btnSaveFallbackRules" disabled>
                             <i class="bi bi-cloud-arrow-up"></i> حفظ على الخادم
                         </button>
+                        <?php endif; ?>
                     </div>
                 </div>
             </div>

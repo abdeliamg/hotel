@@ -10,6 +10,17 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
+// Only admins are allowed to modify the shared fallback rules.
+$__current_user = $GLOBALS['current_user'] ?? null;
+if (!$__current_user || !role_meets_requirement($__current_user['role'] ?? '', 'admin')) {
+    http_response_code(403);
+    echo json_encode([
+        'status' => 'error',
+        'message' => 'صلاحيات غير كافية: يجب أن تكون مديراً لتعديل قواعد البدائل.',
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 $raw = file_get_contents('php://input');
 $payload = json_decode($raw, true);
 
