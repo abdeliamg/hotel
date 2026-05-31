@@ -1,4 +1,16 @@
 <?php
+// TEMP DIAGNOSTIC: surface any fatal (incl. errors inside included files) with a
+// 200 status so the host's generic 500 page does not hide the real message.
+register_shutdown_function(function () {
+    $e = error_get_last();
+    if ($e && in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_RECOVERABLE_ERROR], true)) {
+        if (!headers_sent()) {
+            http_response_code(200);
+            header('Content-Type: text/plain; charset=utf-8');
+        }
+        echo "\n\nFATAL DIAGNOSTIC:\n" . $e['message'] . "\nin " . $e['file'] . ':' . $e['line'] . "\n";
+    }
+});
 session_start();
 require_once __DIR__ . '/check.php';
 require_once __DIR__ . '/includes/root_nav.php';
@@ -239,7 +251,9 @@ LEFT JOIN PilgrimsCount           pc  ON h.hotel_name = pc.hotel_name;
 $hotels = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $ex) {
     error_log('hotel listing query failed: ' . $ex->getMessage());
-    http_response_code(500);
+    // Return 200 on purpose so the host does not replace the body with a
+    // generic 500 page — we want the actual message to be visible.
+    http_response_code(200);
     header('Content-Type: text/html; charset=utf-8');
     echo '<pre dir="ltr" style="white-space:pre-wrap;color:#b91c1c;font-family:monospace;padding:16px">'
         . 'HOTEL LISTING QUERY ERROR:' . "\n"
