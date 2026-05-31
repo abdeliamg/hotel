@@ -205,12 +205,14 @@ function parseGroups(data) {
         if (!line) continue;
         const parts = splitLineFields(line);
         if (parts.length < 3) continue;
-        const name = parts[0];
+        // The first field is now the master_group (التكتل). Group-name as a
+        // separate identifier has been removed; we mirror master_group into
+        // `name` so legacy references in the rest of the code keep working.
+        const masterGroup = parts[0];
         const type = parseInt(parts[1], 10);
         const count = parseInt(parts[2], 10);
-        const masterGroup = parts.length >= 4 && parts[3] ? parts[3] : null;
-        if (!name || !Number.isFinite(type) || type <= 0 || !Number.isFinite(count) || count <= 0) continue;
-        groups.push({ name, type, count, masterGroup });
+        if (!masterGroup || !Number.isFinite(type) || type <= 0 || !Number.isFinite(count) || count <= 0) continue;
+        groups.push({ name: masterGroup, type, count, masterGroup });
     }
     return groups;
 }
@@ -1104,8 +1106,8 @@ function fetchRoomsByHotelDate(hotel, dateFrom) {
         });
 }
 
-// Column order (always 9 columns):
-// group_name; hotel_name; floor; room_num; master_group; date_from; date_to; room_type; note
+// Column order (always 8 columns):
+// hotel_name; floor; room_num; master_group; date_from; date_to; room_type; note
 // Returns an array-of-arrays (first row = header) suitable for SheetJS.
 function buildExportRows(mgMap, roomMap, hotelName) {
     const resolveMg = name => {
@@ -1135,17 +1137,17 @@ function buildExportRows(mgMap, roomMap, hotelName) {
     };
     const hotel = hotelName || '';
 
-    const header = ['المجموعة', 'الفندق', 'الطابق', 'رقم الغرفة', 'التكتل', 'تاريخ البداية', 'تاريخ النهاية', 'نوع الغرفة', 'ملاحظة'];
+    const header = ['الفندق', 'الطابق', 'رقم الغرفة', 'التكتل', 'تاريخ البداية', 'تاريخ النهاية', 'نوع الغرفة', 'ملاحظة'];
     const rows = [header];
 
     for (const row of state.assignedRows) {
         const mg = resolveMg(row.groupName) || row.masterGroup || '';
         const info = roomInfo(row.roomNumber);
-        rows.push([row.groupName, hotel, resolveFloor(info, row), row.roomNumber, mg, info.date_from || '', info.date_to || '', resolveType(info, row), fallbackNote(row)]);
+        rows.push([hotel, resolveFloor(info, row), row.roomNumber, mg, info.date_from || '', info.date_to || '', resolveType(info, row), fallbackNote(row)]);
     }
     for (const row of state.unassignedRooms) {
         const info = roomInfo(row.roomNumber);
-        rows.push(['غير مخصصة', hotel, resolveFloor(info, row), row.roomNumber, '', info.date_from || '', info.date_to || '', resolveType(info, row), '']);
+        rows.push([hotel, resolveFloor(info, row), row.roomNumber, '', info.date_from || '', info.date_to || '', resolveType(info, row), '']);
     }
     if (state.unassignedGroups.length > 0) {
         // Blank separator row, then a repeated header for the unassigned block.
@@ -1153,7 +1155,7 @@ function buildExportRows(mgMap, roomMap, hotelName) {
         rows.push(header);
         for (const g of state.unassignedGroups) {
             const mg = resolveMg(g.groupName) || g.masterGroup || '';
-            rows.push([`${g.groupName}(${g.remaining})`, hotel, '', 'GROUP_UNASSIGNED', mg, '', '', g.type !== undefined && g.type !== null ? g.type : '', '']);
+            rows.push([hotel, '', 'GROUP_UNASSIGNED', mg, '', '', g.type !== undefined && g.type !== null ? g.type : '', `(${g.remaining}) غير موزّعة`]);
         }
     }
     return rows;
@@ -1165,9 +1167,8 @@ function triggerXLSXDownload(rows) {
         throw new Error('XLSX library not loaded');
     }
     const ws = XLSX.utils.aoa_to_sheet(rows);
-    // Reasonable column widths for the 7 columns.
+    // Reasonable column widths for the 8 exported columns.
     ws['!cols'] = [
-        { wch: 22 }, // group_name
         { wch: 24 }, // hotel_name
         { wch: 8 },  // floor
         { wch: 12 }, // room_num
@@ -1442,10 +1443,10 @@ function loadSample() {
         '301\t3', '302\t3', '303\t3', '304\t3',
     ].join('\n');
     els.groupsInput.value = [
-        'المجموعة الكبيرة\t3\t5\tتكتل أ',
-        'المجموعة الإضافية\t3\t3\tتكتل أ',
-        'المجموعة الوسطى\t2\t3\tتكتل ب',
-        'المجموعة الصغيرة\t2\t2\tتكتل ب',
+        'تكتل أ\t3\t5',
+        'تكتل أ\t2\t3',
+        'تكتل ب\t2\t3',
+        'تكتل ب\t3\t2',
     ].join('\n');
     updateCounters();
     updateRoomsStats();

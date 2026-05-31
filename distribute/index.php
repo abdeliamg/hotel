@@ -900,9 +900,9 @@ $canEditFallbackRules = $__current_user
         </div>
         <div class="col-md-6">
             <div class="card-surface input-card">
-                <div class="card-title"><i class="bi bi-people-fill"></i> بيانات المجموعات</div>
-                <div class="hint">صيغة كل سطر: <code>اسم المجموعة</code> &lt;Tab&gt; <code>نوع الغرفة</code> &lt;Tab&gt; <code>عدد الغرف</code> <span class="text-muted">(اختياري: &lt;Tab&gt; <code>التكتل</code>)</span></div>
-                <textarea id="groupsInput" placeholder="مثال:&#10;المجموعة أ&#9;2&#9;3&#10;المجموعة ب&#9;3&#9;2"></textarea>
+                <div class="card-title"><i class="bi bi-people-fill"></i> بيانات متطلبات التكتلات</div>
+                <div class="hint">صيغة كل سطر: <code>التكتل</code> &lt;Tab&gt; <code>نوع الغرفة</code> &lt;Tab&gt; <code>عدد الغرف</code></div>
+                <textarea id="groupsInput" placeholder="مثال:&#10;تكتل أ&#9;2&#9;3&#10;تكتل ب&#9;3&#9;2"></textarea>
                 <div class="counter">
                     <span>الأسطر المكتشفة:</span>
                     <span class="badge bg-primary" id="groupsCount">0</span>
