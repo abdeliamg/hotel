@@ -145,6 +145,7 @@ if ($action === 'delete') {
 }
 
 // Listing query (Q1: DATE('now', 'localtime') everywhere)
+try {
 $stmt = $pdo->query("WITH
 ActiveRooms AS (
     SELECT r.hotel_name, r.room_num, r.room_type
@@ -236,6 +237,16 @@ LEFT JOIN ReservedIncompleteRooms rir ON h.hotel_name = rir.hotel_name
 LEFT JOIN PilgrimsCount           pc  ON h.hotel_name = pc.hotel_name;
 ");
 $hotels = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $ex) {
+    error_log('hotel listing query failed: ' . $ex->getMessage());
+    http_response_code(500);
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<pre dir="ltr" style="white-space:pre-wrap;color:#b91c1c;font-family:monospace;padding:16px">'
+        . 'HOTEL LISTING QUERY ERROR:' . "\n"
+        . htmlspecialchars($ex->getMessage(), ENT_QUOTES, 'UTF-8')
+        . '</pre>';
+    exit;
+}
 
 $csrf = generate_csrf_token();
 
