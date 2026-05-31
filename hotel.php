@@ -192,6 +192,28 @@ ReservedEmptyRooms AS (
     WHERE o.room_num IS NULL
     GROUP BY ar.hotel_name
 ),
+RoomPilgrimCounts AS (
+    SELECT hotel_name, room_num, COUNT(*) AS pilgrim_count
+    FROM hotel_pilgrim
+    GROUP BY hotel_name, room_num
+),
+ReservedIncompleteRooms AS (
+    -- Reserved (active) rooms that are PARTIALLY filled: they have at least one
+    -- pilgrim but fewer than the room capacity (room_type). Fully empty rooms are
+    -- excluded (those are counted separately as "reserved available").
+    SELECT ar.hotel_name,
+           COUNT(ar.room_num) AS reserved_incomplete_rooms
+    FROM ActiveReservations ar
+    JOIN ActiveRooms r
+      ON r.hotel_name = ar.hotel_name
+     AND r.room_num   = ar.room_num
+    JOIN RoomPilgrimCounts rpc
+      ON rpc.hotel_name = ar.hotel_name
+     AND rpc.room_num   = ar.room_num
+    WHERE rpc.pilgrim_count > 0
+      AND rpc.pilgrim_count < r.room_type
+    GROUP BY ar.hotel_name
+),
 PilgrimsCount AS (
     SELECT hotel_name, COUNT(*) AS pilgrims
     FROM hotel_pilgrim
@@ -203,13 +225,15 @@ SELECT h.hotel_name, h.address, h.note, h.id,
        COALESCE(rr.reserved_rooms, 0)              AS reserved_rooms,
        COALESCE(rc.total_rooms, 0) - COALESCE(rr.reserved_rooms, 0) AS available_rooms,
        COALESCE(rer.reserved_empty_rooms, 0)       AS reserved_empty_rooms,
+       COALESCE(rir.reserved_incomplete_rooms, 0)  AS reserved_incomplete_rooms,
        COALESCE(rc.total_beds, 0)   - COALESCE(rr.reserved_beds, 0) AS available_beds,
        COALESCE(pc.pilgrims, 0)                    AS pilgrims_count
 FROM hotel h
-LEFT JOIN RoomCounts         rc  ON h.hotel_name = rc.hotel_name
-LEFT JOIN ReservedRooms      rr  ON h.hotel_name = rr.hotel_name
-LEFT JOIN ReservedEmptyRooms rer ON h.hotel_name = rer.hotel_name
-LEFT JOIN PilgrimsCount      pc  ON h.hotel_name = pc.hotel_name;
+LEFT JOIN RoomCounts              rc  ON h.hotel_name = rc.hotel_name
+LEFT JOIN ReservedRooms           rr  ON h.hotel_name = rr.hotel_name
+LEFT JOIN ReservedEmptyRooms      rer ON h.hotel_name = rer.hotel_name
+LEFT JOIN ReservedIncompleteRooms rir ON h.hotel_name = rir.hotel_name
+LEFT JOIN PilgrimsCount           pc  ON h.hotel_name = pc.hotel_name;
 ");
 $hotels = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -330,6 +354,7 @@ function note_as_safe_href(string $note): ?string {
                     <th>الغرف المحجوزة</th>
                     <th>الغرف المتاحة</th>
                     <th>الغرف المحجوزة المتاحة</th>
+                    <th>غرف محجوزة غير مكتملة</th>
                     <th>الأسرّة المتاحة</th>
                     <th>إجمالي الحجاج</th>
                     <?php if ($isHotelAdmin): ?><th>الإجراءات</th><?php endif; ?>
@@ -352,6 +377,7 @@ function note_as_safe_href(string $note): ?string {
                         <td class="detail-clickable" data-detail="reserved" title="عرض الغرف المحجوزة"><?= e((string)$hotel['reserved_rooms']) ?></td>
                         <td class="detail-clickable" data-detail="available" title="عرض الغرف المتاحة"><?= e((string)$hotel['available_rooms']) ?></td>
                         <td class="detail-clickable" data-detail="reserved_empty" title="عرض الغرف المحجوزة المتاحة"><?= e((string)$hotel['reserved_empty_rooms']) ?></td>
+                        <td class="detail-clickable" data-detail="reserved_incomplete" title="عرض الغرف المحجوزة غير المكتملة"><?= e((string)$hotel['reserved_incomplete_rooms']) ?></td>
                         <td><?= e((string)$hotel['available_beds']) ?></td>
                         <td class="detail-clickable" data-detail="pilgrims" title="عرض الحجاج"><?= e((string)$hotel['pilgrims_count']) ?></td>
                         <?php if ($isHotelAdmin): ?>
@@ -664,6 +690,10 @@ function note_as_safe_href(string $note): ?string {
                     url = 'hotel_reserved_empty_room.php';
                     title = 'الغرف المحجوزة المتاحة - ' + hotelName;
                     render = renderReservedEmptyRooms;
+                } else if (kind === 'reserved_incomplete') {
+                    url = 'hotel_reserved_incomplete_room.php';
+                    title = 'غرف محجوزة غير مكتملة - ' + hotelName;
+                    render = renderReservedIncompleteRooms;
                 } else if (kind === 'pilgrims') {
                     url = 'hotel_assigned_pilgrims.php';
                     title = 'الحجاج - ' + hotelName;
@@ -738,6 +768,22 @@ function note_as_safe_href(string $note): ?string {
                     html += `<li class="list-group-item d-flex justify-content-between">
                                 <span>رقم الغرفة: <strong>${esc(r.room_num)}</strong></span>
                                 <span>المجموعة: ${esc(r.group_name)} | النوع: ${esc(r.room_type)}</span>
+                             </li>`;
+                });
+                html += '</ul>';
+                return html;
+            }
+
+            function renderReservedIncompleteRooms(rooms) {
+                if (!rooms.length) return '<div class="text-center text-muted py-3">لا توجد غرف محجوزة غير مكتملة</div>';
+                const roomNumbers = rooms.map(r => esc(r.room_num)).join('، ');
+                let html = `<div class="mb-3"><strong>أرقام الغرف (${rooms.length}):</strong><br>${roomNumbers}</div>`;
+                html += '<ul class="list-group">';
+                rooms.forEach(r => {
+                    const count = (r.pilgrim_count == null) ? 0 : r.pilgrim_count;
+                    html += `<li class="list-group-item d-flex justify-content-between">
+                                <span>رقم الغرفة: <strong>${esc(r.room_num)}</strong> <span class="text-muted">(${esc(r.group_name)})</span></span>
+                                <span>المُسكَّنون: <strong>${esc(count)}</strong> / ${esc(r.room_type)}</span>
                              </li>`;
                 });
                 html += '</ul>';
