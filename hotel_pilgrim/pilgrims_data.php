@@ -12,8 +12,13 @@ if (!$isAdmin && $master_group === '') {
     exit();
 }
 
-$term       = isset($_GET['q']) ? (string)$_GET['q'] : '';
-$searchTerm = '%' . $term . '%';
+$term = isset($_GET['q']) ? (string)$_GET['q'] : '';
+// Smart fuzzy search: collapse any internal whitespace and turn it into
+// SQL wildcards, so typing "عبد المنعم" becomes the LIKE pattern
+// "%عبد%المنعم%" and matches any row that contains those tokens in order
+// across the same column (name / barcode / app_id / group).
+$normalized = preg_replace('/\s+/u', '%', trim($term));
+$searchTerm = '%' . $normalized . '%';
 
 // Build the scoping clause: admins see all; non-admins are limited to pilgrims
 // whose `group` belongs to the logged-in master_group (one master_group → many groups).

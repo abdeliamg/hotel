@@ -51,6 +51,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'datatable') {
     $where = '';
     $params = [];
     if ($searchValue !== '') {
+        // Smart fuzzy search: turn whitespace into SQL wildcards so
+        // "عبد المنعم" matches a name like "عبد الرحمن المنعم".
+        $fuzzy = preg_replace('/\s+/u', '%', $searchValue);
         // Use LIKE across useful columns
         $where = " WHERE
             hp.hotel_name LIKE :s OR
@@ -61,7 +64,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'datatable') {
             p.app_id      LIKE :s OR
             hp.note       LIKE :s
         ";
-        $params[':s'] = '%'.$searchValue.'%';
+        $params[':s'] = '%'.$fuzzy.'%';
     }
 
     // Filtered count
@@ -450,7 +453,7 @@ $hotels = $stmt_hotels->fetchAll();
             ajax: {
                 url: '/hotel_pilgrim/pilgrims_data.php',
                 dataType: 'json',
-                delay: 300,
+                delay: 700,
                 data: function (params) {
                     return { q: params.term, page: params.page || 1 };
                 },

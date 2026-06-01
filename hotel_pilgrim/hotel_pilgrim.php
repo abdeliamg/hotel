@@ -34,8 +34,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'datatable') {
     $params = [':group_name' => $master_group];
     $where = '';
     if ($search !== '') {
+        // Smart fuzzy search: replace whitespace inside the query with SQL
+        // wildcards so "عبد المنعم" becomes "%عبد%المنعم%" and matches
+        // values that contain those tokens in order in the same column.
+        $fuzzy = preg_replace('/\s+/u', '%', $search);
         $where = " AND (hp.hotel_name LIKE :search OR hp.floor LIKE :search OR hp.room_num LIKE :search OR hp.barcode LIKE :search OR p.name LIKE :search OR p.app_id LIKE :search OR hp.note LIKE :search)";
-        $params[':search'] = '%' . $search . '%';
+        $params[':search'] = '%' . $fuzzy . '%';
     }
 
     $stmtTotal = $pdo->prepare("SELECT COUNT(*) FROM hotel_pilgrim WHERE group_name = :group_name");
@@ -610,7 +614,7 @@ $hotels = $stmt_hotels->fetchAll(PDO::FETCH_ASSOC);
                 ajax: {
                     url: '/hotel_pilgrim/pilgrims_data.php',
                     dataType: 'json',
-                    delay: 250,
+                    delay: 700,
                     data: function(params) {
                         return {
                             q: params.term,
