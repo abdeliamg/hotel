@@ -78,7 +78,8 @@ function parse_pasted_tsv(string $rawText, array $columnAliases, array $fixedOrd
 /**
  * Normalize pasted/imported dates to Y-m-d.
  * Accepts common Excel formats:
- *   yyyy-mm-dd, yyyy/mm/dd, dd/mm/yyyy, dd-mm-yyyy, d/m/yyyy
+ *   yyyy-mm-dd, yyyy/mm/dd, yyyy/m/d, yyyy-m-d,
+ *   dd/mm/yyyy, dd-mm-yyyy, d/m/yyyy, d-m-yyyy
  * Returns null for empty/invalid input.
  */
 function normalize_import_date(?string $value): ?string
@@ -88,10 +89,14 @@ function normalize_import_date(?string $value): ?string
         return null;
     }
 
-    // ISO and day-first formats first so values like 5/6/2026 are read as 5 June.
+    // ISO formats first (year-first), then day-first formats so values like
+    // 5/6/2026 are read as 5 June. Non-padded variants come right after the
+    // padded ones so 2026/5/3 and 5/6/2026 both parse strictly.
     $formats = [
         'Y-m-d', // yyyy-mm-dd
+        'Y-n-j', // yyyy-m-d
         'Y/m/d', // yyyy/mm/dd
+        'Y/n/j', // yyyy/m/d
         'd/m/Y', // dd/mm/yyyy
         'j/n/Y', // d/m/yyyy
         'd-m-Y', // dd-mm-yyyy
