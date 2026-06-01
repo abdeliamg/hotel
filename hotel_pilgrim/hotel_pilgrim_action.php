@@ -85,6 +85,247 @@ function hotel_pilgrim_resolve_group(PDO $pdo, string $hotelName, string $floor,
     return $groupName === false ? null : (string)$groupName;
 }
 
+/**
+ * Resolve the (floor, group_name) for a (hotel, room) tuple in the context of
+ * the logged-in master_group. Used by the "bulk assign" flow where the user
+ * pastes only the room number; the floor is inferred from `res` reservations.
+ *
+ * Returns one of:
+ *   ['ok' => true,  'floor' => string, 'group_name' => string]
+ *   ['ok' => false, 'reason' => 'not_reserved']
+ *   ['ok' => false, 'reason' => 'ambiguous_floor']
+ */
+function hotel_pilgrim_resolve_floor_and_group(PDO $pdo, string $hotelName, string $roomNum, string $masterGroup): array
+{
+    if ($masterGroup !== '') {
+        $stmt = $pdo->prepare(
+            'SELECT DISTINCT floor, group_name FROM res
+              WHERE hotel_name = :h AND room_num = :r AND group_name = :g'
+        );
+        $stmt->execute([':h' => $hotelName, ':r' => $roomNum, ':g' => $masterGroup]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        if (count($rows) === 1) {
+            return ['ok' => true, 'floor' => (string)$rows[0]['floor'], 'group_name' => (string)$rows[0]['group_name']];
+        }
+        if (count($rows) > 1) {
+            return ['ok' => false, 'reason' => 'ambiguous_floor'];
+        }
+
+        if (group_can_use_all_rooms($pdo, $masterGroup, $hotelName)) {
+            $stmt = $pdo->prepare(
+                'SELECT DISTINCT floor FROM res WHERE hotel_name = :h AND room_num = :r'
+            );
+            $stmt->execute([':h' => $hotelName, ':r' => $roomNum]);
+            $floors = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            if (count($floors) === 1) {
+                return ['ok' => true, 'floor' => (string)$floors[0], 'group_name' => $masterGroup];
+            }
+            if (count($floors) > 1) {
+                return ['ok' => false, 'reason' => 'ambiguous_floor'];
+            }
+        }
+        return ['ok' => false, 'reason' => 'not_reserved'];
+    }
+
+    $stmt = $pdo->prepare(
+        'SELECT DISTINCT floor, group_name FROM res WHERE hotel_name = :h AND room_num = :r'
+    );
+    $stmt->execute([':h' => $hotelName, ':r' => $roomNum]);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    if (count($rows) === 1) {
+        return ['ok' => true, 'floor' => (string)$rows[0]['floor'], 'group_name' => (string)$rows[0]['group_name']];
+    }
+    if (count($rows) > 1) {
+        return ['ok' => false, 'reason' => 'ambiguous_floor'];
+    }
+    return ['ok' => false, 'reason' => 'not_reserved'];
+}
+
+// =====================================================================
+// BULK ASSIGN (paste 3 columns: barcode, hotel_name, room_num)
+// =====================================================================
+// The single-add flow lets the user pick hotel → floor → room → barcode
+// using cascading Select2 dropdowns. This flow accepts a pasted spreadsheet
+// where the floor is intentionally omitted: it is resolved from `res` based
+// on the logged-in master_group (or, for admins, any matching reservation).
+// All four single-add checks are mirrored here:
+//   - pilgrim exists
+//   - pilgrim not departed (no pilgrim_flight row)
+//   - pilgrim not already assigned in hotel_pilgrim
+//   - the room is reserved (or "all_rooms" enabled) for this master_group
+// Duplicate barcodes pasted within the same batch are also rejected.
+
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'bulk_assign_validate') {
+    $parsed = parse_pasted_tsv(
+        $_POST['rows_text'] ?? '',
+        [
+            'barcode'    => ['الباركود', 'باركود'],
+            'hotel_name' => ['hotel', 'الفندق'],
+            'room_num'   => ['room', 'رقم الغرفة', 'رقم_الغرفة'],
+        ],
+        ['barcode', 'hotel_name', 'room_num']
+    );
+
+    if (!$parsed['ok']) {
+        echo json_encode(['success' => false, 'message' => $parsed['message']]);
+        exit();
+    }
+
+    $stmtPilgrim  = $pdo->prepare("SELECT COUNT(*) FROM pilgrim WHERE barcode = :barcode");
+    $stmtDeparted = $pdo->prepare("SELECT COUNT(*) FROM pilgrim_flight WHERE barcode = :barcode");
+
+    $rows         = [];
+    $errors       = [];
+    $seenBarcodes = [];
+    $validCount   = 0;
+
+    foreach ($parsed['rows'] as $idx => $row) {
+        $rowNum = $idx + 1;
+        $item = [
+            'row'        => $rowNum,
+            'barcode'    => trim((string)($row['barcode']    ?? '')),
+            'hotel_name' => trim((string)($row['hotel_name'] ?? '')),
+            'room_num'   => trim((string)($row['room_num']   ?? '')),
+            'floor'      => '',
+            'group_name' => '',
+            'status'     => 'invalid',
+            'message'    => '',
+        ];
+
+        if ($item['barcode'] === '' || $item['hotel_name'] === '' || $item['room_num'] === '') {
+            $item['message'] = 'حقول مطلوبة ناقصة (الباركود، الفندق، رقم الغرفة).';
+            $errors[] = ['row' => $rowNum, 'message' => $item['message']];
+            $rows[] = $item;
+            continue;
+        }
+
+        $bcKey = mb_strtolower($item['barcode'], 'UTF-8');
+        if (isset($seenBarcodes[$bcKey])) {
+            $item['message'] = 'تم تكرار هذا الباركود في صف سابق ضمن نفس اللصق.';
+            $errors[] = ['row' => $rowNum, 'message' => $item['message']];
+            $rows[] = $item;
+            continue;
+        }
+        $seenBarcodes[$bcKey] = true;
+
+        $stmtPilgrim->execute([':barcode' => $item['barcode']]);
+        if ((int)$stmtPilgrim->fetchColumn() === 0) {
+            $item['message'] = 'الباركود غير موجود في جدول الحجاج.';
+            $errors[] = ['row' => $rowNum, 'message' => $item['message']];
+            $rows[] = $item;
+            continue;
+        }
+
+        $stmtDeparted->execute([':barcode' => $item['barcode']]);
+        if ((int)$stmtDeparted->fetchColumn() > 0) {
+            $item['message'] = 'لا يمكن إضافة حاج تم ترحيله.';
+            $errors[] = ['row' => $rowNum, 'message' => $item['message']];
+            $rows[] = $item;
+            continue;
+        }
+
+        if (hotel_pilgrim_is_assigned($pdo, $item['barcode'])) {
+            $item['message'] = 'هذا الحاج مضاف إلى غرفة مسبقاً.';
+            $errors[] = ['row' => $rowNum, 'message' => $item['message']];
+            $rows[] = $item;
+            continue;
+        }
+
+        $resolved = hotel_pilgrim_resolve_floor_and_group($pdo, $item['hotel_name'], $item['room_num'], $master_group);
+        if (!$resolved['ok']) {
+            if (($resolved['reason'] ?? '') === 'ambiguous_floor') {
+                $item['message'] = 'رقم الغرفة موجود في أكثر من طابق لهذا الفندق — يتعذر تحديد الطابق تلقائياً.';
+            } else {
+                $item['message'] = 'الغرفة غير محجوزة لهذه المجموعة في هذا الفندق.';
+            }
+            $errors[] = ['row' => $rowNum, 'message' => $item['message']];
+            $rows[] = $item;
+            continue;
+        }
+
+        $item['floor']      = $resolved['floor'];
+        $item['group_name'] = $resolved['group_name'];
+        $item['status']     = 'ok';
+        $item['message']    = 'صالح';
+        $rows[] = $item;
+        $validCount++;
+    }
+
+    echo json_encode([
+        'success'      => true,
+        'rows'         => $rows,
+        'errors'       => $errors,
+        'valid_count'  => $validCount,
+        'total'        => count($rows),
+        'all_valid'    => empty($errors) && !empty($rows),
+    ], JSON_UNESCAPED_UNICODE);
+    exit();
+}
+
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'bulk_assign_commit') {
+    $rows = json_decode($_POST['rows'] ?? '[]', true);
+    if (!is_array($rows) || empty($rows)) {
+        echo json_encode(['success' => false, 'message' => 'لا توجد بيانات للإدراج.']);
+        exit();
+    }
+
+    $inserted = 0;
+    try {
+        $pdo->beginTransaction();
+        $stmt = $pdo->prepare(
+            "INSERT INTO hotel_pilgrim (hotel_name, floor, room_num, barcode, group_name, note)
+             VALUES (:hotel_name, :floor, :room_num, :barcode, :group_name, :note)"
+        );
+
+        $seenBarcodes = [];
+        foreach ($rows as $row) {
+            $barcode    = trim((string)($row['barcode']    ?? ''));
+            $hotelName  = trim((string)($row['hotel_name'] ?? ''));
+            $roomNum    = trim((string)($row['room_num']   ?? ''));
+
+            if ($barcode === '' || $hotelName === '' || $roomNum === '') {
+                throw new RuntimeException('حقول مطلوبة ناقصة في الصفوف المرسلة.');
+            }
+            $bcKey = mb_strtolower($barcode, 'UTF-8');
+            if (isset($seenBarcodes[$bcKey])) {
+                throw new RuntimeException('باركود مكرر: ' . $barcode);
+            }
+            $seenBarcodes[$bcKey] = true;
+
+            // Re-validate each row at commit time (defensive: data could have
+            // changed between the validate call and the commit click).
+            if (hotel_pilgrim_is_departed($pdo, $barcode)) {
+                throw new RuntimeException('لا يمكن إضافة حاج تم ترحيله: ' . $barcode);
+            }
+            if (hotel_pilgrim_is_assigned($pdo, $barcode)) {
+                throw new RuntimeException('هذا الحاج مضاف إلى غرفة مسبقاً: ' . $barcode);
+            }
+            $resolved = hotel_pilgrim_resolve_floor_and_group($pdo, $hotelName, $roomNum, $master_group);
+            if (!$resolved['ok']) {
+                throw new RuntimeException('الغرفة غير متاحة: ' . $hotelName . ' / ' . $roomNum);
+            }
+
+            $stmt->execute([
+                ':hotel_name' => $hotelName,
+                ':floor'      => $resolved['floor'],
+                ':room_num'   => $roomNum,
+                ':barcode'    => $barcode,
+                ':group_name' => $resolved['group_name'],
+                ':note'       => (string)($row['note'] ?? ''),
+            ]);
+            $inserted++;
+        }
+        $pdo->commit();
+        echo json_encode(['success' => true, 'inserted' => $inserted]);
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit();
+}
+
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'import_validate') {
     $parsed = parse_pasted_tsv(
         $_POST['rows_text'] ?? '',

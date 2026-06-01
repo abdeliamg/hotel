@@ -387,6 +387,10 @@ $hotels = $stmt_hotels->fetchAll(PDO::FETCH_ASSOC);
             <i class="fas fa-file-import"></i>
             استيراد لصق Excel
         </button>
+        <button class="btn btn-success" id="bulkAssignBtn">
+            <i class="fas fa-people-arrows"></i>
+            تعيين حجاج بالجملة
+        </button>
 
         <table id="hotel_pilgrim_table" class="table table-striped">
             <thead>
@@ -483,6 +487,41 @@ $hotels = $stmt_hotels->fetchAll(PDO::FETCH_ASSOC);
                     <div class="modal-footer">
                         <button class="btn btn-outline-primary" id="validateBulkImportBtn">تحقق</button>
                         <button class="btn btn-primary" id="runBulkImportBtn" disabled>إدراج</button>
+                        <button class="btn btn-secondary" data-dismiss="modal">إغلاق</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bulk Assign (3 columns: barcode, hotel, room — floor auto-derived) -->
+        <div id="bulkAssignModal" class="modal fade" tabindex="-1" role="dialog" aria-hidden="true">
+            <div class="modal-dialog modal-xl">
+                <div class="modal-content">
+                    <div class="modal-header bg-success text-white">
+                        <h5 class="modal-title"><i class="fas fa-people-arrows"></i> تعيين حجاج بالجملة</h5>
+                        <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="alert alert-info small mb-2">
+                            الصق ثلاثة أعمدة من Excel مفصولة بـ <code>TAB</code> بالترتيب:
+                            <b>الباركود</b> &nbsp;|&nbsp; <b>الفندق</b> &nbsp;|&nbsp; <b>رقم الغرفة</b><br>
+                            سيقوم النظام بالتحقق أن كل غرفة محجوزة لهذا التكتل واستخراج رقم الطابق تلقائياً من الحجوزات.
+                        </div>
+                        <pre class="bg-light p-2 rounded small mb-2" style="direction:ltr;text-align:left;">1744&#9;فندق المثال&#9;305
+1745&#9;فندق المثال&#9;306</pre>
+                        <textarea id="bulkAssignTextarea" class="form-control" rows="8" placeholder="الصق البيانات هنا..." style="font-family:Consolas,'Courier New',monospace;"></textarea>
+                        <div id="bulkAssignSummary" class="mt-3"></div>
+                        <div id="bulkAssignResults" class="mt-2"></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-outline-primary" id="validateBulkAssignBtn">
+                            <i class="fas fa-check-circle"></i> تحقق
+                        </button>
+                        <button class="btn btn-success" id="runBulkAssignBtn" disabled>
+                            <i class="fas fa-save"></i> تأكيد التعيين
+                        </button>
                         <button class="btn btn-secondary" data-dismiss="modal">إغلاق</button>
                     </div>
                 </div>
@@ -838,6 +877,127 @@ $hotels = $stmt_hotels->fetchAll(PDO::FETCH_ASSOC);
                     $('#bulkImportSummary').text(`تم الإدراج: ${parsed.inserted || 0}`);
                     table.ajax.reload(null, false);
                 }, 'json');
+            });
+
+            // =========================
+            // Bulk Assign (3 cols: barcode, hotel, room — floor auto-derived)
+            // =========================
+            let bulkAssignRows = [];
+            const baEsc = (s) => (s ?? '').toString()
+                .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+            function bulkAssignReset() {
+                bulkAssignRows = [];
+                $('#bulkAssignSummary').empty();
+                $('#bulkAssignResults').empty();
+                $('#runBulkAssignBtn').prop('disabled', true);
+            }
+
+            $('#bulkAssignBtn').on('click', function() {
+                $('#bulkAssignTextarea').val('');
+                bulkAssignReset();
+                $('#bulkAssignModal').modal('show');
+            });
+
+            function renderBulkAssignResults(rows) {
+                if (!rows || !rows.length) {
+                    $('#bulkAssignResults').empty();
+                    return;
+                }
+                let html = '<div style="max-height:320px;overflow:auto;border:1px solid #dee2e6;border-radius:6px;">'
+                         + '<table class="table table-sm table-striped mb-0" style="font-size:13px;">'
+                         + '<thead><tr>'
+                         + '<th>#</th><th>الباركود</th><th>الفندق</th><th>الطابق</th><th>رقم الغرفة</th>'
+                         + '<th>التكتل</th><th>الحالة</th><th>الرسالة</th>'
+                         + '</tr></thead><tbody>';
+                rows.forEach(function(r) {
+                    const ok = r.status === 'ok';
+                    const badge = ok
+                        ? '<span class="badge badge-success">صالح</span>'
+                        : '<span class="badge badge-danger">غير صالح</span>';
+                    html += '<tr class="' + (ok ? '' : 'table-danger') + '">'
+                         + '<td>' + baEsc(r.row) + '</td>'
+                         + '<td>' + baEsc(r.barcode) + '</td>'
+                         + '<td>' + baEsc(r.hotel_name) + '</td>'
+                         + '<td>' + baEsc(r.floor || '—') + '</td>'
+                         + '<td>' + baEsc(r.room_num) + '</td>'
+                         + '<td>' + baEsc(r.group_name || '—') + '</td>'
+                         + '<td>' + badge + '</td>'
+                         + '<td>' + baEsc(r.message || '') + '</td>'
+                         + '</tr>';
+                });
+                html += '</tbody></table></div>';
+                $('#bulkAssignResults').html(html);
+            }
+
+            $('#validateBulkAssignBtn').on('click', function() {
+                const text = $('#bulkAssignTextarea').val().trim();
+                if (!text) {
+                    $('#bulkAssignSummary').html('<div class="alert alert-warning py-2 mb-0">لا توجد بيانات للصق.</div>');
+                    return;
+                }
+                bulkAssignReset();
+                const $btn = $(this).prop('disabled', true).text('جاري التحقق...');
+                $.post('/hotel_pilgrim/hotel_pilgrim_action.php',
+                    { action: 'bulk_assign_validate', rows_text: text },
+                    function(resp) {
+                        $btn.prop('disabled', false).html('<i class="fas fa-check-circle"></i> تحقق');
+                        let parsed = resp;
+                        if (typeof parsed !== 'object') parsed = JSON.parse(resp);
+                        if (!parsed.success) {
+                            $('#bulkAssignSummary').html('<div class="alert alert-danger py-2 mb-0">' + baEsc(parsed.message || 'فشل التحقق.') + '</div>');
+                            return;
+                        }
+                        renderBulkAssignResults(parsed.rows || []);
+                        const total   = parsed.total      || 0;
+                        const valid   = parsed.valid_count || 0;
+                        const invalid = total - valid;
+                        const allOk   = parsed.all_valid && total > 0;
+                        const cls     = allOk ? 'alert-success' : (valid > 0 ? 'alert-warning' : 'alert-danger');
+                        const txt     = allOk
+                            ? `جميع الصفوف صالحة (${valid} من ${total}). يمكنك المتابعة.`
+                            : `النتيجة: ${valid} صالح / ${invalid} غير صالح من إجمالي ${total} — الرجاء إصلاح الأخطاء قبل المتابعة.`;
+                        $('#bulkAssignSummary').html('<div class="alert ' + cls + ' py-2 mb-0">' + txt + '</div>');
+
+                        if (allOk) {
+                            bulkAssignRows = (parsed.rows || []).filter(function(r){ return r.status === 'ok'; });
+                            $('#runBulkAssignBtn').prop('disabled', false);
+                        }
+                    }
+                ).fail(function() {
+                    $btn.prop('disabled', false).html('<i class="fas fa-check-circle"></i> تحقق');
+                    $('#bulkAssignSummary').html('<div class="alert alert-danger py-2 mb-0">تعذّر الاتصال بالخادم.</div>');
+                });
+            });
+
+            $('#runBulkAssignBtn').on('click', function() {
+                if (!bulkAssignRows.length) {
+                    $('#bulkAssignSummary').html('<div class="alert alert-warning py-2 mb-0">قم بالتحقق أولاً.</div>');
+                    return;
+                }
+                if (!confirm('سيتم تعيين ' + bulkAssignRows.length + ' حاجاً إلى الغرف. هل تريد المتابعة؟')) return;
+                const $btn = $(this).prop('disabled', true).text('جاري الحفظ...');
+                $.post('/hotel_pilgrim/hotel_pilgrim_action.php',
+                    { action: 'bulk_assign_commit', rows: JSON.stringify(bulkAssignRows) },
+                    function(resp) {
+                        let parsed = resp;
+                        if (typeof parsed !== 'object') parsed = JSON.parse(resp);
+                        if (!parsed.success) {
+                            $btn.prop('disabled', false).html('<i class="fas fa-save"></i> تأكيد التعيين');
+                            $('#bulkAssignSummary').html('<div class="alert alert-danger py-2 mb-0">' + baEsc(parsed.message || 'فشل التعيين.') + '</div>');
+                            return;
+                        }
+                        $('#bulkAssignSummary').html('<div class="alert alert-success py-2 mb-0">تم تعيين ' + (parsed.inserted || 0) + ' حاج بنجاح.</div>');
+                        $('#bulkAssignTextarea').val('');
+                        $('#bulkAssignResults').empty();
+                        bulkAssignRows = [];
+                        $btn.prop('disabled', true).html('<i class="fas fa-save"></i> تأكيد التعيين');
+                        table.ajax.reload(null, false);
+                    }
+                ).fail(function() {
+                    $btn.prop('disabled', false).html('<i class="fas fa-save"></i> تأكيد التعيين');
+                    $('#bulkAssignSummary').html('<div class="alert alert-danger py-2 mb-0">تعذّر الاتصال بالخادم.</div>');
+                });
             });
         });
     </script>
