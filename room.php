@@ -95,6 +95,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'datatable') {
 
     // Global search
     $searchValue = trim((string)($_POST['search']['value'] ?? ''));
+    $hotelFilter = trim((string)($_POST['hotel_filter'] ?? ''));
 
     // Ordering (default to id DESC)
     $orderCol = 'id';
@@ -115,8 +116,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'datatable') {
     $recordsTotal = (int)$pdo->query("SELECT COUNT(*) FROM room")->fetchColumn();
 
     // Filtering
-    $whereSql = '';
+    $whereParts = [];
     $params = [];
+    if ($hotelFilter !== '') {
+        $whereParts[] = 'hotel_name = :hotel_filter';
+        $params[':hotel_filter'] = $hotelFilter;
+    }
     if ($searchValue !== '') {
         $likes = [];
         foreach ($columns as $i => $col) {
@@ -124,8 +129,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'datatable') {
             $likes[] = "$col LIKE $ph";
             $params[$ph] = '%' . $searchValue . '%';
         }
-        $whereSql = 'WHERE ' . implode(' OR ', $likes);
+        $whereParts[] = '(' . implode(' OR ', $likes) . ')';
     }
+    $whereSql = $whereParts ? 'WHERE ' . implode(' AND ', $whereParts) : '';
 
     // recordsFiltered
     if ($whereSql) {
@@ -305,13 +311,110 @@ if (isset($_POST['action']) && $_POST['action'] === 'edit') {
     }
 
     try {
-        $stmt = $pdo->prepare("UPDATE room SET room_num = ?, room_type = ?, hotel_name = ?, 
-                              floor = ?, note = ?, date_from = ?, date_to = ?, contract = ? 
+        $pdo->beginTransaction();
+
+        // Snapshot the row BEFORE the update so we can detect identity changes
+        // and cascade them to dependent tables (res, hotel_pilgrim) that
+        // reference rooms by the (hotel_name, room_num, floor) triple.
+        $stmtOld = $pdo->prepare("SELECT hotel_name, room_num, floor FROM room WHERE id = ?");
+        $stmtOld->execute([$room_id]);
+        $old = $stmtOld->fetch(PDO::FETCH_ASSOC);
+        if (!$old) {
+            $pdo->rollBack();
+            json_out(['status' => 'error', 'message' => 'Room not found.']);
+        }
+
+        $stmt = $pdo->prepare("UPDATE room SET room_num = ?, room_type = ?, hotel_name = ?,
+                              floor = ?, note = ?, date_from = ?, date_to = ?, contract = ?
                               WHERE id = ?");
         $stmt->execute([$room_num, $room_type, $hotel_id, $floor, $note, $date_from, $date_to, $contract, $room_id]);
-        json_out(['status' => 'success', 'message' => 'Room updated successfully']);
+
+        // Cascade identity changes to dependent tables. The match is on the
+        // OLD (hotel_name, room_num, floor) — the same key those tables use to
+        // reference a physical room. We compare as strings because the underlying
+        // columns can be INTEGER or TEXT depending on insert path, but SQLite
+        // accepts both transparently in equality comparisons.
+        $oldHotel   = (string)($old['hotel_name'] ?? '');
+        $oldRoomNum = (string)($old['room_num']  ?? '');
+        $oldFloor   = (string)($old['floor']     ?? '');
+        $newHotel   = (string)$hotel_id;
+        $newRoomNum = (string)$room_num;
+        $newFloor   = (string)$floor;
+
+        $identityChanged = ($newHotel   !== $oldHotel)
+                        || ($newRoomNum !== $oldRoomNum)
+                        || ($newFloor   !== $oldFloor);
+
+        $resUpdated = 0;
+        $hpUpdated  = 0;
+
+        if ($identityChanged) {
+            $upRes = $pdo->prepare(
+                "UPDATE res
+                    SET hotel_name = :new_hotel,
+                        room_num   = :new_room,
+                        floor      = :new_floor
+                  WHERE hotel_name = :old_hotel
+                    AND room_num   = :old_room
+                    AND floor      = :old_floor"
+            );
+            $upRes->execute([
+                ':new_hotel' => $newHotel,
+                ':new_room'  => $newRoomNum,
+                ':new_floor' => $newFloor,
+                ':old_hotel' => $oldHotel,
+                ':old_room'  => $oldRoomNum,
+                ':old_floor' => $oldFloor,
+            ]);
+            $resUpdated = $upRes->rowCount();
+
+            $upHp = $pdo->prepare(
+                "UPDATE hotel_pilgrim
+                    SET hotel_name = :new_hotel,
+                        room_num   = :new_room,
+                        floor      = :new_floor
+                  WHERE hotel_name = :old_hotel
+                    AND room_num   = :old_room
+                    AND floor      = :old_floor"
+            );
+            $upHp->execute([
+                ':new_hotel' => $newHotel,
+                ':new_room'  => $newRoomNum,
+                ':new_floor' => $newFloor,
+                ':old_hotel' => $oldHotel,
+                ':old_room'  => $oldRoomNum,
+                ':old_floor' => $oldFloor,
+            ]);
+            $hpUpdated = $upHp->rowCount();
+        }
+
+        $pdo->commit();
+
+        json_out([
+            'status'  => 'success',
+            'message' => 'Room updated successfully',
+            'cascade' => [
+                'identity_changed'      => $identityChanged,
+                'res_updated'           => $resUpdated,
+                'hotel_pilgrim_updated' => $hpUpdated,
+                'old'                   => [
+                    'hotel_name' => $oldHotel,
+                    'room_num'   => $oldRoomNum,
+                    'floor'      => $oldFloor,
+                ],
+                'new'                   => [
+                    'hotel_name' => $newHotel,
+                    'room_num'   => $newRoomNum,
+                    'floor'      => $newFloor,
+                ],
+            ],
+        ]);
     } catch (PDOException $e) {
+        if ($pdo->inTransaction()) { $pdo->rollBack(); }
         json_out(['status' => 'error', 'message' => 'Failed to update room: ' . $e->getMessage()]);
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) { $pdo->rollBack(); }
+        json_out(['status' => 'error', 'message' => 'Server error: ' . $e->getMessage()]);
     }
 }
 
@@ -550,7 +653,71 @@ if (isset($_POST['action']) && $_POST['action'] === 'increase_date_to') {
     }
 }
 
-// Get a room by id (for “Show old data”)
+// Preview the cascade that will happen if the (hotel_name, room_num, floor)
+// identity changes for this room row. Returns the list of reservations and the
+// list of assigned pilgrims that currently point to the OLD identity, so the
+// UI can show a confirmation popup before saving the edit.
+if (isset($_POST['action']) && $_POST['action'] === 'preview_edit_cascade') {
+    $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
+    if ($id <= 0) {
+        json_out(['status' => 'error', 'message' => 'Invalid id.']);
+    }
+    try {
+        $stmt = $pdo->prepare("SELECT hotel_name, room_num, floor FROM room WHERE id = ?");
+        $stmt->execute([$id]);
+        $old = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$old) {
+            json_out(['status' => 'error', 'message' => 'Room not found.']);
+        }
+
+        // res.group_name stores the master_group value (see res.php bulk import
+        // comments). We alias it to make the JSON self-explanatory.
+        $resStmt = $pdo->prepare(
+            "SELECT id, group_name AS master_group, start_date, end_date
+               FROM res
+              WHERE hotel_name = :h AND room_num = :r AND floor = :f
+              ORDER BY date(start_date) ASC, id ASC"
+        );
+        $resStmt->execute([
+            ':h' => $old['hotel_name'],
+            ':r' => $old['room_num'],
+            ':f' => $old['floor'],
+        ]);
+        $reservations = $resStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Pilgrim names are resolved by joining hotel_pilgrim.barcode to
+        // pilgrim.barcode. If a pilgrim row was deleted, fall back to barcode.
+        $hpStmt = $pdo->prepare(
+            "SELECT hp.id              AS hp_id,
+                    hp.barcode         AS barcode,
+                    hp.floor           AS floor,
+                    hp.room_num        AS room_num,
+                    hp.group_name      AS group_name,
+                    p.name             AS name
+               FROM hotel_pilgrim hp
+          LEFT JOIN pilgrim p ON p.barcode = hp.barcode
+              WHERE hp.hotel_name = :h AND hp.room_num = :r AND hp.floor = :f
+              ORDER BY p.name ASC, hp.id ASC"
+        );
+        $hpStmt->execute([
+            ':h' => $old['hotel_name'],
+            ':r' => $old['room_num'],
+            ':f' => $old['floor'],
+        ]);
+        $pilgrims = $hpStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        json_out([
+            'status'       => 'ok',
+            'old'          => $old,
+            'reservations' => $reservations,
+            'pilgrims'     => $pilgrims,
+        ]);
+    } catch (PDOException $e) {
+        json_out(['status' => 'error', 'message' => 'Failed to preview: ' . $e->getMessage()]);
+    }
+}
+
+// Get a room by id (for "Show old data")
 if (isset($_POST['action']) && $_POST['action'] === 'get_room') {
     $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
     if ($id <= 0) {
@@ -571,7 +738,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_room') {
 // Fetch data for page render (hotels only)
 // ========================
 try {
-    $hotels_stmt = $pdo->query("SELECT id, hotel_name FROM hotel");
+    $hotels_stmt = $pdo->query("SELECT id, hotel_name FROM hotel ORDER BY hotel_name ASC");
     $hotels = $hotels_stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     die("Failed to fetch hotels: " . $e->getMessage());
@@ -680,6 +847,35 @@ try {
         .badge-status { font-size: .85rem; }
         .table-fixed-head thead th { position: sticky; top: 0; background: #fff; z-index: 1; }
         .alert-compact { padding: .5rem .75rem; }
+        .hotel-filter-bar {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 12px 14px;
+            margin-bottom: 16px;
+        }
+        .hotel-filter-bar .filter-label {
+            font-weight: 700;
+            color: #1e293b;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .hotel-filter-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .hotel-filter-btn {
+            border-radius: 999px;
+            padding: 6px 14px;
+            font-size: 13px;
+            white-space: normal;
+            text-align: center;
+            max-width: 100%;
+        }
+        .hotel-filter-btn.active {
+            color: #fff;
+        }
     </style>
 </head>
 <body>
@@ -692,6 +888,18 @@ try {
         <div class="text-center mb-3 d-flex justify-content-center gap-2">
             <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addRoomModal">إضافة غرفة جديدة</button>
             <button class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#bulkAddModal">إضافة عدة غرف (Excel)</button>
+        </div>
+
+        <div class="hotel-filter-bar">
+            <div class="filter-label">تصفية حسب الفندق</div>
+            <div class="hotel-filter-buttons" id="hotelFilterButtons" role="group" aria-label="تصفية حسب الفندق">
+                <button type="button" class="btn btn-primary hotel-filter-btn active" data-hotel="">الكل</button>
+                <?php foreach ($hotels as $hotel): ?>
+                    <button type="button" class="btn btn-outline-primary hotel-filter-btn" data-hotel="<?= h($hotel['hotel_name']) ?>">
+                        <?= h($hotel['hotel_name']) ?>
+                    </button>
+                <?php endforeach; ?>
+            </div>
         </div>
 
         <table id="roomsTable" class="display table table-bordered">
@@ -993,9 +1201,12 @@ try {
     <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.10.2/dist/umd/popper.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.datatables.net/1.10.24/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
     <script>
         $(document).ready(function() {
+            let selectedHotelFilter = '';
+
             // =========================
             // DataTable (server-side)
             // =========================
@@ -1007,6 +1218,7 @@ try {
                     type: 'POST',
                     data: function (d) {
                         d.action = 'datatable';
+                        d.hotel_filter = selectedHotelFilter;
                     }
                 },
                 searchDelay: 400,
@@ -1033,6 +1245,19 @@ try {
             table.search(this.value).draw();
         }
     });
+
+            $('#hotelFilterButtons').on('click', '.hotel-filter-btn', function() {
+                const $btn = $(this);
+                if ($btn.hasClass('active')) {
+                    return;
+                }
+                $('#hotelFilterButtons .hotel-filter-btn')
+                    .removeClass('active btn-primary')
+                    .addClass('btn-outline-primary');
+                $btn.addClass('active btn-primary').removeClass('btn-outline-primary');
+                selectedHotelFilter = String($btn.data('hotel') || '');
+                table.ajax.reload();
+            });
 
             // Utility (shared with bulk)
             function fillOldModal(room) {
@@ -1160,6 +1385,10 @@ try {
 
             $("#roomsTable").on("click", '.edit-btn', function() {
                 const id = $(this).data('id');
+                const origHotel    = String($(this).data('hotel')    ?? '');
+                const origFloor    = String($(this).data('floor')    ?? '');
+                const origRoomNum  = String($(this).data('room_num') ?? '');
+
                 $('#editRoomNum').val($(this).data('room_num'));
                 $('#editRoomType').val($(this).data('room_type'));
                 $('#editHotelId').val($(this).data('hotel'));
@@ -1169,7 +1398,72 @@ try {
                 $('#editContract').val($(this).data('contract'));
                 $('#editNote').val($(this).data('note'));
 
-                $('#updateRoomBtn').off('click').on('click', function() {
+                // Escape helper for SweetAlert HTML.
+                const escHtml = (s) => (s ?? '').toString()
+                    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+                // Build the confirmation HTML showing affected reservations and
+                // pilgrim assignments before the cascade runs.
+                function buildCascadeHtml(preview) {
+                    const oldHotel = escHtml(preview.old?.hotel_name);
+                    const oldFloor = escHtml(preview.old?.floor);
+                    const oldRoom  = escHtml(preview.old?.room_num);
+                    const newHotel = escHtml($('#editHotelId').val());
+                    const newFloor = escHtml($('#editFloor').val());
+                    const newRoom  = escHtml($('#editRoomNum').val());
+
+                    let html = ''
+                        + '<div style="text-align:right; direction:rtl; font-size:14px;">'
+                        + '<p><b>تغيير هوية الغرفة:</b><br>'
+                        + 'من: ' + oldHotel + ' • طابق ' + oldFloor + ' • غرفة ' + oldRoom + '<br>'
+                        + 'إلى: ' + newHotel + ' • طابق ' + newFloor + ' • غرفة ' + newRoom
+                        + '</p>';
+
+                    const res = preview.reservations || [];
+                    html += '<hr><p><b>الحجوزات المتأثرة (' + res.length + '):</b></p>';
+                    if (res.length > 0) {
+                        html += '<div style="max-height:180px; overflow:auto; border:1px solid #ddd; border-radius:6px;">'
+                             + '<table class="table table-sm table-striped mb-0" style="font-size:13px;">'
+                             + '<thead><tr><th>التكتل</th><th>تاريخ البداية</th><th>تاريخ النهاية</th></tr></thead><tbody>';
+                        res.forEach(function(r) {
+                            html += '<tr>'
+                                  + '<td>' + escHtml(r.master_group) + '</td>'
+                                  + '<td>' + escHtml(r.start_date)   + '</td>'
+                                  + '<td>' + escHtml(r.end_date)     + '</td>'
+                                  + '</tr>';
+                        });
+                        html += '</tbody></table></div>';
+                    } else {
+                        html += '<p class="text-muted">لا توجد حجوزات.</p>';
+                    }
+
+                    const pls = preview.pilgrims || [];
+                    html += '<hr><p><b>إسكان الحجاج المتأثر (' + pls.length + '):</b></p>';
+                    if (pls.length > 0) {
+                        html += '<div style="max-height:180px; overflow:auto; border:1px solid #ddd; border-radius:6px;">'
+                             + '<table class="table table-sm table-striped mb-0" style="font-size:13px;">'
+                             + '<thead><tr><th>اسم الحاج</th><th>الباركود</th><th>الطابق الحالي</th><th>سيُنقل إلى الطابق</th></tr></thead><tbody>';
+                        pls.forEach(function(p) {
+                            html += '<tr>'
+                                  + '<td>' + escHtml(p.name || '—') + '</td>'
+                                  + '<td>' + escHtml(p.barcode)     + '</td>'
+                                  + '<td>' + escHtml(p.floor)       + '</td>'
+                                  + '<td>' + newFloor               + '</td>'
+                                  + '</tr>';
+                        });
+                        html += '</tbody></table></div>';
+                    } else {
+                        html += '<p class="text-muted">لا يوجد إسكان حجاج.</p>';
+                    }
+
+                    html += '<p class="mt-3"><b>هل تريد المتابعة؟</b> سيتم تحديث الغرفة وانتقال الحجوزات وإسكان الحجاج المذكورة أعلاه تلقائياً إلى الهوية الجديدة.</p>'
+                          + '</div>';
+                    return html;
+                }
+
+                // Performs the actual edit request after the user has decided.
+                function performEdit() {
                     $.ajax({
                         url: 'room.php',
                         method: 'POST',
@@ -1191,10 +1485,88 @@ try {
                                 $('#editRoomModal').modal('hide');
                                 table.ajax.reload(null, false);
                             } else {
-                                alert(res.message || 'Failed.');
+                                Swal.fire({ icon: 'error', title: 'فشل', text: res.message || 'فشل التحديث.' });
                             }
                         },
-                        error: function() { alert('Failed to update room.'); }
+                        error: function() {
+                            Swal.fire({ icon: 'error', title: 'خطأ', text: 'فشل الاتصال بالخادم.' });
+                        }
+                    });
+                }
+
+                $('#updateRoomBtn').off('click').on('click', function() {
+                    const newHotel   = String($('#editHotelId').val() ?? '');
+                    const newFloor   = String($('#editFloor').val()   ?? '');
+                    const newRoomNum = String($('#editRoomNum').val() ?? '');
+
+                    // Only the room number or the floor are user-facing identity
+                    // fields the spec calls out; we still detect a hotel change
+                    // because the cascade applies the same way.
+                    const identityChanged = (newHotel   !== origHotel)
+                                         || (newFloor   !== origFloor)
+                                         || (newRoomNum !== origRoomNum);
+
+                    if (!identityChanged) {
+                        performEdit();
+                        return;
+                    }
+
+                    // Ask the server which reservations / pilgrims will follow
+                    // the rename, then either confirm or just notify the user.
+                    $.ajax({
+                        url: 'room.php',
+                        method: 'POST',
+                        dataType: 'json',
+                        data: { action: 'preview_edit_cascade', id: id },
+                        success: function(preview) {
+                            if (!preview || preview.status !== 'ok') {
+                                Swal.fire({
+                                    icon: 'error',
+                                    title: 'تعذّر فحص التأثير',
+                                    text: (preview && preview.message) || 'حدث خطأ غير متوقع.'
+                                });
+                                return;
+                            }
+
+                            const hasRes = (preview.reservations || []).length > 0;
+                            const hasHp  = (preview.pilgrims     || []).length > 0;
+
+                            if (!hasRes && !hasHp) {
+                                // No dependent rows at all – just inform the user
+                                // and proceed with the edit.
+                                Swal.fire({
+                                    icon: 'info',
+                                    title: 'لا يوجد ارتباط',
+                                    text: 'لا توجد حجوزات ولا إسكان حجاج مرتبط برقم الغرفة/الطابق الحاليين. سيتم حفظ التعديل مباشرةً.',
+                                    confirmButtonText: 'حسناً'
+                                }).then(function() { performEdit(); });
+                                return;
+                            }
+
+                            // Show confirmation dialog with all affected rows so
+                            // the user can accept or cancel.
+                            Swal.fire({
+                                title: 'تأكيد تحديث الغرفة',
+                                html: buildCascadeHtml(preview),
+                                icon: 'warning',
+                                showCancelButton: true,
+                                confirmButtonText: 'نعم، حدّث',
+                                cancelButtonText: 'إلغاء',
+                                width: '780px',
+                                focusCancel: true
+                            }).then(function(result) {
+                                if (result.isConfirmed) {
+                                    performEdit();
+                                }
+                            });
+                        },
+                        error: function() {
+                            Swal.fire({
+                                icon: 'error',
+                                title: 'خطأ في الاتصال',
+                                text: 'تعذّر فحص الحجوزات وإسكان الحجاج المرتبطين.'
+                            });
+                        }
                     });
                 });
             });

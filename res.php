@@ -554,6 +554,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
     $start  = isset($_POST['start'])  ? (int)$_POST['start']  : 0;
     $length = isset($_POST['length']) ? (int)$_POST['length'] : 10;
     $searchValue = $_POST['search']['value'] ?? '';
+    $hotelFilter = trim((string)($_POST['hotel_filter'] ?? ''));
 
     // Map DataTables columns indices to safe SQL columns
     $columns = [
@@ -586,10 +587,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
     $totalRecords = (int)$pdo->query($totalSql)->fetchColumn();
 
     // Filtering
-    $where = '';
+    $whereParts = [];
     $params = [];
+    if ($hotelFilter !== '') {
+        $whereParts[] = 'res.hotel_name = :hotel_filter';
+        $params[':hotel_filter'] = $hotelFilter;
+    }
     if ($searchValue !== '') {
-        $where = ' WHERE
+        $whereParts[] = '(
             res.id LIKE :q OR
             res.hotel_name LIKE :q OR
             res.floor LIKE :q OR
@@ -599,9 +604,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
             g.master_group LIKE :q OR
             res.start_date LIKE :q OR
             res.end_date LIKE :q OR
-            res.note LIKE :q ';
+            res.note LIKE :q
+        )';
         $params[':q'] = '%' . $searchValue . '%';
     }
+    $where = $whereParts ? ' WHERE ' . implode(' AND ', $whereParts) : '';
 
     // Records after filtering
     $filteredSql = 'SELECT COUNT(DISTINCT res.id) ' . $baseFrom . $where;
@@ -683,6 +690,15 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
         'data'            => $data
     ]);
 }
+
+// Load hotels for page filter buttons and form dropdowns
+try {
+    $hotels = $pdo->query("SELECT id, hotel_name FROM hotel ORDER BY hotel_name ASC")->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $hotels = [];
+}
+
+function h($v) { return htmlspecialchars($v ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
 ?>
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -914,6 +930,48 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
             gap: 6px;
         }
         .format-tip i { color: #f59e0b; margin-top: 2px; }
+
+        .hotel-filter-bar {
+            background: rgba(255,255,255,.96);
+            border-radius: 16px;
+            padding: 16px 18px;
+            box-shadow: var(--card-shadow);
+            margin-bottom: 16px;
+        }
+        .hotel-filter-bar .filter-label {
+            font-weight: 700;
+            color: #1e293b;
+            margin-bottom: 10px;
+            font-size: 15px;
+            text-align: center;
+        }
+        .hotel-filter-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: center;
+        }
+        .hotel-filter-btn {
+            border-radius: 999px;
+            padding: 7px 16px;
+            font-size: 13px;
+            white-space: normal;
+            text-align: center;
+            max-width: 100%;
+            border: 2px solid #e2e8f0;
+            background: #fff;
+            color: #1e293b;
+        }
+        .hotel-filter-btn:hover {
+            border-color: #f59e0b;
+            color: #d97706;
+        }
+        .hotel-filter-btn.active {
+            background: linear-gradient(135deg,#f59e0b 0%,#d97706 100%);
+            border-color: transparent;
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(245,158,11,.25);
+        }
     </style>
 </head>
 <body>
@@ -940,6 +998,18 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
                 <i class="bi bi-clipboard-plus"></i>
                 إضافة حجوزات بالجملة (من إكسل)
             </button>
+        </div>
+
+        <div class="hotel-filter-bar">
+            <div class="filter-label">تصفية حسب الفندق</div>
+            <div class="hotel-filter-buttons" id="hotelFilterButtons" role="group" aria-label="تصفية حسب الفندق">
+                <button type="button" class="hotel-filter-btn active" data-hotel="">الكل</button>
+                <?php foreach ($hotels as $hotel): ?>
+                    <button type="button" class="hotel-filter-btn" data-hotel="<?= h($hotel['hotel_name']) ?>">
+                        <?= h($hotel['hotel_name']) ?>
+                    </button>
+                <?php endforeach; ?>
+            </div>
         </div>
 
         <!-- Table Container -->
@@ -1206,6 +1276,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
         $(function () {
             // Shared results cache (used by BOTH single & bulk flows)
             let resultsCache = [];
+            let selectedHotelFilter = '';
 
             // DataTable (server-side)
             const table = $('#reservationsTable').DataTable({
@@ -1214,7 +1285,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
                 processing: true,
                 ajax: {
                     url: 'res.php?action=fetch',
-                    type: 'POST'
+                    type: 'POST',
+                    data: function (d) {
+                        d.hotel_filter = selectedHotelFilter;
+                    }
                 },
                 order: [[0, 'desc']], // default: latest first
                 lengthMenu: [
@@ -1234,6 +1308,17 @@ if (isset($_GET['action']) && $_GET['action'] === 'fetch') {
             table.search(this.value).draw();
         }
     });
+
+            $('#hotelFilterButtons').on('click', '.hotel-filter-btn', function() {
+                const $btn = $(this);
+                if ($btn.hasClass('active')) {
+                    return;
+                }
+                $('#hotelFilterButtons .hotel-filter-btn').removeClass('active');
+                $btn.addClass('active');
+                selectedHotelFilter = String($btn.data('hotel') || '');
+                table.ajax.reload();
+            });
 
             function renderResultsTable() {
                 const tbody = $('#bulkResultsBody').empty();
