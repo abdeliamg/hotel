@@ -247,17 +247,84 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && $_POST['action'] == 'bulk_assign_val
         $item['group_name'] = $resolved['group_name'];
         $item['status']     = 'ok';
         $item['message']    = 'صالح';
+        $item['capacity_warning'] = null;
         $rows[] = $item;
         $validCount++;
     }
 
+    // ---------------------------------------------------------------
+    // Capacity hints (non-blocking). For each (hotel, floor, room) that has at
+    // least one OK row, compare the projected pilgrim count (already-assigned
+    // + this batch) against the room's capacity (room.room_type). Rows in the
+    // same room receive a friendly note explaining the mismatch — they remain
+    // status='ok' so the user can still proceed.
+    // ---------------------------------------------------------------
+    $roomKeys       = [];
+    $incomingByRoom = [];
+    foreach ($rows as $r) {
+        if (($r['status'] ?? '') !== 'ok') continue;
+        $key = $r['hotel_name'] . '|' . $r['floor'] . '|' . $r['room_num'];
+        $roomKeys[$key]        = ['h' => $r['hotel_name'], 'f' => $r['floor'], 'r' => $r['room_num']];
+        $incomingByRoom[$key]  = ($incomingByRoom[$key] ?? 0) + 1;
+    }
+
+    $capacityByRoom = [];
+    $existingByRoom = [];
+    if (!empty($roomKeys)) {
+        $capStmt = $pdo->prepare(
+            "SELECT MIN(room_type) FROM room
+              WHERE hotel_name = :h AND floor = :f AND room_num = :r"
+        );
+        $existStmt = $pdo->prepare(
+            "SELECT COUNT(*) FROM hotel_pilgrim
+              WHERE hotel_name = :h AND floor = :f AND room_num = :r"
+        );
+        foreach ($roomKeys as $key => $t) {
+            $capStmt->execute([':h' => $t['h'], ':f' => $t['f'], ':r' => $t['r']]);
+            $cap = $capStmt->fetchColumn();
+            $capacityByRoom[$key] = ($cap === false || $cap === null) ? null : (int)$cap;
+
+            $existStmt->execute([':h' => $t['h'], ':f' => $t['f'], ':r' => $t['r']]);
+            $existingByRoom[$key] = (int)$existStmt->fetchColumn();
+        }
+    }
+
+    $warningsCount = 0;
+    foreach ($rows as &$r) {
+        if (($r['status'] ?? '') !== 'ok') continue;
+        $key       = $r['hotel_name'] . '|' . $r['floor'] . '|' . $r['room_num'];
+        $cap       = $capacityByRoom[$key] ?? null;
+        $existing  = $existingByRoom[$key] ?? 0;
+        $incoming  = $incomingByRoom[$key] ?? 0;
+        $projected = $existing + $incoming;
+
+        if ($cap === null || $cap <= 0) {
+            continue; // No capacity info — skip the hint.
+        }
+        if ($projected > $cap) {
+            $r['capacity_warning'] = [
+                'level'   => 'over',
+                'message' => "تجاوز السعة: المتوقع {$projected} حاج لغرفة سعتها {$cap}.",
+            ];
+            $warningsCount++;
+        } elseif ($projected < $cap) {
+            $r['capacity_warning'] = [
+                'level'   => 'under',
+                'message' => "أقل من السعة: المتوقع {$projected} حاج لغرفة سعتها {$cap}.",
+            ];
+            $warningsCount++;
+        }
+    }
+    unset($r);
+
     echo json_encode([
-        'success'      => true,
-        'rows'         => $rows,
-        'errors'       => $errors,
-        'valid_count'  => $validCount,
-        'total'        => count($rows),
-        'all_valid'    => empty($errors) && !empty($rows),
+        'success'         => true,
+        'rows'            => $rows,
+        'errors'          => $errors,
+        'valid_count'     => $validCount,
+        'total'           => count($rows),
+        'all_valid'       => empty($errors) && !empty($rows),
+        'warnings_count'  => $warningsCount,
     ], JSON_UNESCAPED_UNICODE);
     exit();
 }

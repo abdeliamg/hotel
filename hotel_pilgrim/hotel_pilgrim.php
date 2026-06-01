@@ -912,10 +912,23 @@ $hotels = $stmt_hotels->fetchAll(PDO::FETCH_ASSOC);
                          + '</tr></thead><tbody>';
                 rows.forEach(function(r) {
                     const ok = r.status === 'ok';
-                    const badge = ok
+                    let badge = ok
                         ? '<span class="badge badge-success">صالح</span>'
                         : '<span class="badge badge-danger">غير صالح</span>';
-                    html += '<tr class="' + (ok ? '' : 'table-danger') + '">'
+                    let rowClass = ok ? '' : 'table-danger';
+                    let messageHtml = baEsc(r.message || '');
+                    if (ok && r.capacity_warning) {
+                        const lvl = r.capacity_warning.level;
+                        if (lvl === 'over') {
+                            badge += ' <span class="badge badge-warning" title="تجاوز السعة">⚠ تنبيه سعة</span>';
+                            rowClass = 'table-warning';
+                            messageHtml += '<div class="text-warning small mt-1"><strong>⚠</strong> ' + baEsc(r.capacity_warning.message) + '</div>';
+                        } else {
+                            badge += ' <span class="badge badge-info" title="أقل من السعة">ℹ ملاحظة سعة</span>';
+                            messageHtml += '<div class="text-info small mt-1"><strong>ℹ</strong> ' + baEsc(r.capacity_warning.message) + '</div>';
+                        }
+                    }
+                    html += '<tr class="' + rowClass + '">'
                          + '<td>' + baEsc(r.row) + '</td>'
                          + '<td>' + baEsc(r.barcode) + '</td>'
                          + '<td>' + baEsc(r.hotel_name) + '</td>'
@@ -923,7 +936,7 @@ $hotels = $stmt_hotels->fetchAll(PDO::FETCH_ASSOC);
                          + '<td>' + baEsc(r.room_num) + '</td>'
                          + '<td>' + baEsc(r.group_name || '—') + '</td>'
                          + '<td>' + badge + '</td>'
-                         + '<td>' + baEsc(r.message || '') + '</td>'
+                         + '<td>' + messageHtml + '</td>'
                          + '</tr>';
                 });
                 html += '</tbody></table></div>';
@@ -949,13 +962,18 @@ $hotels = $stmt_hotels->fetchAll(PDO::FETCH_ASSOC);
                             return;
                         }
                         renderBulkAssignResults(parsed.rows || []);
-                        const total   = parsed.total      || 0;
-                        const valid   = parsed.valid_count || 0;
-                        const invalid = total - valid;
-                        const allOk   = parsed.all_valid && total > 0;
-                        const cls     = allOk ? 'alert-success' : (valid > 0 ? 'alert-warning' : 'alert-danger');
-                        const txt     = allOk
-                            ? `جميع الصفوف صالحة (${valid} من ${total}). يمكنك المتابعة.`
+                        const total    = parsed.total          || 0;
+                        const valid    = parsed.valid_count    || 0;
+                        const warnings = parsed.warnings_count || 0;
+                        const invalid  = total - valid;
+                        const allOk    = parsed.all_valid && total > 0;
+                        const cls      = allOk
+                            ? (warnings > 0 ? 'alert-warning' : 'alert-success')
+                            : (valid > 0 ? 'alert-warning' : 'alert-danger');
+                        const txt      = allOk
+                            ? (warnings > 0
+                                ? `جميع الصفوف صالحة (${valid} من ${total}) — مع ${warnings} تنبيه/ملاحظة سعة. التعيين مسموح به.`
+                                : `جميع الصفوف صالحة (${valid} من ${total}). يمكنك المتابعة.`)
                             : `النتيجة: ${valid} صالح / ${invalid} غير صالح من إجمالي ${total} — الرجاء إصلاح الأخطاء قبل المتابعة.`;
                         $('#bulkAssignSummary').html('<div class="alert ' + cls + ' py-2 mb-0">' + txt + '</div>');
 
