@@ -152,7 +152,6 @@ if (isset($_POST['action']) && $_POST['action'] === 'datatable') {
                 تعديل
             </button>
             <button class="btn btn-danger btn-sm delete-btn"
-                data-bs-toggle="modal" data-bs-target="#deleteRoomModal"
                 data-id="'.h($r['id']).'">
                 حذف
             </button>
@@ -401,18 +400,105 @@ if (isset($_POST['action']) && $_POST['action'] === 'edit') {
 }
 
 // Delete
+// Preview the cascade impact of deleting a single room. Returns counts and
+// detail lists for the matching res and hotel_pilgrim rows so the UI can
+// show the user exactly what will be left dangling (or wiped, if the
+// cascade checkbox is selected).
+if (isset($_POST['action']) && $_POST['action'] === 'delete_preview') {
+    $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
+    if ($id <= 0) {
+        json_out(['status' => 'error', 'message' => 'Invalid id.']);
+    }
+    try {
+        $stmt = $pdo->prepare("SELECT id, hotel_name, room_num, floor, room_type, date_from, date_to FROM room WHERE id = ?");
+        $stmt->execute([$id]);
+        $room = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$room) {
+            json_out(['status' => 'error', 'message' => 'Room not found.']);
+        }
+
+        $resStmt = $pdo->prepare(
+            "SELECT id, group_name AS master_group, start_date, end_date
+               FROM res
+              WHERE hotel_name = :h AND room_num = :r AND floor = :f
+              ORDER BY date(start_date) ASC, id ASC"
+        );
+        $resStmt->execute([':h' => $room['hotel_name'], ':r' => $room['room_num'], ':f' => $room['floor']]);
+        $reservations = $resStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $hpStmt = $pdo->prepare(
+            "SELECT hp.id AS hp_id, hp.barcode, hp.group_name, p.name
+               FROM hotel_pilgrim hp
+          LEFT JOIN pilgrim p ON p.barcode = hp.barcode
+              WHERE hp.hotel_name = :h AND hp.room_num = :r AND hp.floor = :f
+              ORDER BY p.name ASC, hp.id ASC"
+        );
+        $hpStmt->execute([':h' => $room['hotel_name'], ':r' => $room['room_num'], ':f' => $room['floor']]);
+        $pilgrims = $hpStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        json_out([
+            'status'       => 'ok',
+            'room'         => $room,
+            'res_count'    => count($reservations),
+            'hp_count'     => count($pilgrims),
+            'reservations' => $reservations,
+            'pilgrims'     => $pilgrims,
+        ]);
+    } catch (PDOException $e) {
+        json_out(['status' => 'error', 'message' => 'فشل التحقق: ' . $e->getMessage()]);
+    }
+}
+
 if (isset($_POST['action']) && $_POST['action'] === 'delete') {
-    $room_id = $_POST['id'] ?? '';
+    $room_id     = $_POST['id'] ?? '';
+    $wipeRelated = !empty($_POST['wipe_related']) && $_POST['wipe_related'] !== '0';
 
     if ($room_id === '') {
         json_out(['status' => 'error', 'message' => 'Room ID is required']);
     }
 
     try {
+        $pdo->beginTransaction();
+
+        $resDeleted = 0;
+        $hpDeleted  = 0;
+
+        if ($wipeRelated) {
+            // Capture identity before deleting so we can remove dependent rows
+            // referencing the same (hotel, floor, room_num) tuple.
+            $idStmt = $pdo->prepare("SELECT hotel_name, floor, room_num FROM room WHERE id = ?");
+            $idStmt->execute([$room_id]);
+            $ident = $idStmt->fetch(PDO::FETCH_ASSOC);
+            if ($ident) {
+                $delRes = $pdo->prepare(
+                    "DELETE FROM res WHERE hotel_name = :h AND floor = :f AND room_num = :r"
+                );
+                $delRes->execute([':h' => $ident['hotel_name'], ':f' => $ident['floor'], ':r' => $ident['room_num']]);
+                $resDeleted = $delRes->rowCount();
+
+                $delHp = $pdo->prepare(
+                    "DELETE FROM hotel_pilgrim WHERE hotel_name = :h AND floor = :f AND room_num = :r"
+                );
+                $delHp->execute([':h' => $ident['hotel_name'], ':f' => $ident['floor'], ':r' => $ident['room_num']]);
+                $hpDeleted = $delHp->rowCount();
+            }
+        }
+
         $stmt = $pdo->prepare("DELETE FROM room WHERE id = ?");
         $stmt->execute([$room_id]);
-        json_out(['status' => 'success', 'message' => 'Room deleted successfully']);
+        $deleted = $stmt->rowCount();
+
+        $pdo->commit();
+        json_out([
+            'status'       => 'success',
+            'message'      => 'Room deleted successfully',
+            'deleted'      => $deleted,
+            'res_deleted'  => $resDeleted,
+            'hp_deleted'   => $hpDeleted,
+            'wipe_related' => $wipeRelated,
+        ]);
     } catch (PDOException $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
         json_out(['status' => 'error', 'message' => 'Failed to delete room: ' . $e->getMessage()]);
     }
 }
@@ -632,6 +718,169 @@ if (isset($_POST['action']) && $_POST['action'] === 'increase_date_to') {
         }
     } catch (PDOException $e) {
         json_out(['status' => 'error', 'message' => 'Failed to increase date_to: ' . $e->getMessage()]);
+    }
+}
+
+// ========================
+// BULK DELETE rooms by (hotel_name, date_to)
+// ========================
+
+// List the distinct date_to values available for a hotel, together with how
+// many room rows match each value. Powers the second dropdown in the UI.
+if (isset($_POST['action']) && $_POST['action'] === 'bulk_delete_dates') {
+    $hotel = trim((string)($_POST['hotel'] ?? ''));
+    if ($hotel === '') {
+        json_out(['status' => 'error', 'message' => 'الفندق مطلوب.']);
+    }
+    try {
+        $stmt = $pdo->prepare(
+            "SELECT date_to, COUNT(*) AS cnt
+               FROM room
+              WHERE hotel_name = :h
+                AND date_to IS NOT NULL
+                AND TRIM(date_to) <> ''
+              GROUP BY date_to
+              ORDER BY date(date_to) ASC"
+        );
+        $stmt->execute([':h' => $hotel]);
+        json_out([
+            'status' => 'ok',
+            'dates'  => $stmt->fetchAll(PDO::FETCH_ASSOC),
+        ]);
+    } catch (PDOException $e) {
+        json_out(['status' => 'error', 'message' => 'فشل جلب التواريخ: ' . $e->getMessage()]);
+    }
+}
+
+// Inspect the impact before actually deleting. Returns:
+//   rooms_count : number of room rows that match (hotel_name, date_to)
+//   res_count   : reservations in res that reference any of those rooms
+//                 (matched by hotel_name + floor + room_num)
+//   hp_count    : pilgrim assignments in hotel_pilgrim referencing the rooms
+//   rooms       : sample list of the rooms (floor + room_num) for the dialog
+if (isset($_POST['action']) && $_POST['action'] === 'bulk_delete_preview') {
+    $hotel   = trim((string)($_POST['hotel']   ?? ''));
+    $date_to = trim((string)($_POST['date_to'] ?? ''));
+    if ($hotel === '' || $date_to === '') {
+        json_out(['status' => 'error', 'message' => 'الفندق وتاريخ الانتهاء مطلوبان.']);
+    }
+    try {
+        // Rooms that will be deleted.
+        $roomsStmt = $pdo->prepare(
+            "SELECT id, hotel_name, floor, room_num, room_type, date_from, date_to
+               FROM room
+              WHERE hotel_name = :h AND date_to = :d
+              ORDER BY floor ASC, room_num ASC"
+        );
+        $roomsStmt->execute([':h' => $hotel, ':d' => $date_to]);
+        $rooms = $roomsStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $resCount = 0;
+        $hpCount  = 0;
+        if (!empty($rooms)) {
+            // For each (hotel, floor, room_num), count matching res and
+            // hotel_pilgrim rows. Build a single query with OR groups so we
+            // hit the DB once per table even when many rooms match.
+            $conds  = [];
+            $params = [':h' => $hotel];
+            foreach ($rooms as $i => $r) {
+                $conds[] = "(floor = :f{$i} AND room_num = :r{$i})";
+                $params[":f{$i}"] = $r['floor'];
+                $params[":r{$i}"] = $r['room_num'];
+            }
+            $orBlock = '(' . implode(' OR ', $conds) . ')';
+
+            $resStmt = $pdo->prepare(
+                "SELECT COUNT(*) FROM res WHERE hotel_name = :h AND {$orBlock}"
+            );
+            $resStmt->execute($params);
+            $resCount = (int)$resStmt->fetchColumn();
+
+            $hpStmt = $pdo->prepare(
+                "SELECT COUNT(*) FROM hotel_pilgrim WHERE hotel_name = :h AND {$orBlock}"
+            );
+            $hpStmt->execute($params);
+            $hpCount = (int)$hpStmt->fetchColumn();
+        }
+
+        json_out([
+            'status'      => 'ok',
+            'rooms_count' => count($rooms),
+            'res_count'   => $resCount,
+            'hp_count'    => $hpCount,
+            'rooms'       => $rooms,
+        ]);
+    } catch (PDOException $e) {
+        json_out(['status' => 'error', 'message' => 'فشل التحقق: ' . $e->getMessage()]);
+    }
+}
+
+// Perform the deletion. Only the `room` table is touched by default; pass
+// wipe_related=1 to also remove matching res and hotel_pilgrim rows so the
+// database isn't left with dangling references to the deleted rooms.
+if (isset($_POST['action']) && $_POST['action'] === 'bulk_delete') {
+    $hotel       = trim((string)($_POST['hotel']   ?? ''));
+    $date_to     = trim((string)($_POST['date_to'] ?? ''));
+    $wipeRelated = !empty($_POST['wipe_related']) && $_POST['wipe_related'] !== '0';
+    if ($hotel === '' || $date_to === '') {
+        json_out(['status' => 'error', 'message' => 'الفندق وتاريخ الانتهاء مطلوبان.']);
+    }
+    try {
+        $pdo->beginTransaction();
+
+        $resDeleted = 0;
+        $hpDeleted  = 0;
+
+        if ($wipeRelated) {
+            // Collect (floor, room_num) tuples first so the cascading deletes
+            // target exactly the rooms about to be removed.
+            $tupleStmt = $pdo->prepare(
+                "SELECT DISTINCT floor, room_num FROM room
+                  WHERE hotel_name = :h AND date_to = :d"
+            );
+            $tupleStmt->execute([':h' => $hotel, ':d' => $date_to]);
+            $tuples = $tupleStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            if (!empty($tuples)) {
+                $conds  = [];
+                $params = [':h' => $hotel];
+                foreach ($tuples as $i => $t) {
+                    $conds[] = "(floor = :f{$i} AND room_num = :r{$i})";
+                    $params[":f{$i}"] = $t['floor'];
+                    $params[":r{$i}"] = $t['room_num'];
+                }
+                $orBlock = '(' . implode(' OR ', $conds) . ')';
+
+                $delRes = $pdo->prepare(
+                    "DELETE FROM res WHERE hotel_name = :h AND {$orBlock}"
+                );
+                $delRes->execute($params);
+                $resDeleted = $delRes->rowCount();
+
+                $delHp = $pdo->prepare(
+                    "DELETE FROM hotel_pilgrim WHERE hotel_name = :h AND {$orBlock}"
+                );
+                $delHp->execute($params);
+                $hpDeleted = $delHp->rowCount();
+            }
+        }
+
+        $stmt = $pdo->prepare("DELETE FROM room WHERE hotel_name = :h AND date_to = :d");
+        $stmt->execute([':h' => $hotel, ':d' => $date_to]);
+        $deleted = $stmt->rowCount();
+
+        $pdo->commit();
+        json_out([
+            'status'       => 'success',
+            'message'      => 'تم حذف الغرف بنجاح.',
+            'deleted'      => $deleted,
+            'res_deleted'  => $resDeleted,
+            'hp_deleted'   => $hpDeleted,
+            'wipe_related' => $wipeRelated,
+        ]);
+    } catch (PDOException $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        json_out(['status' => 'error', 'message' => 'فشل الحذف: ' . $e->getMessage()]);
     }
 }
 
@@ -867,9 +1116,12 @@ try {
     <div class="container">
         <h2 class="text-center mb-4">إدارة الغرف</h2>
 
-        <div class="text-center mb-3 d-flex justify-content-center gap-2">
+        <div class="text-center mb-3 d-flex justify-content-center gap-2 flex-wrap">
             <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addRoomModal">إضافة غرفة جديدة</button>
             <button class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#bulkAddModal">إضافة عدة غرف (Excel)</button>
+            <button class="btn btn-outline-danger" data-bs-toggle="modal" data-bs-target="#bulkDeleteRoomsModal">
+                <i class="bi bi-trash"></i> حذف غرف بالجملة
+            </button>
         </div>
 
         <div class="hotel-filter-bar">
@@ -1044,6 +1296,55 @@ try {
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
                     <button type="button" class="btn btn-danger" id="confirmDeleteRoomBtn">حذف</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bulk Delete Rooms Modal -->
+    <div class="modal fade" id="bulkDeleteRoomsModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title"><i class="bi bi-trash"></i> حذف غرف بالجملة</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="إغلاق"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-warning small">
+                        اختر الفندق ثم تاريخ الانتهاء. سيتم عرض عدد الغرف المتأثرة وأي حجوزات/إسكان حجاج مرتبطة قبل تأكيد الحذف.
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="bdHotel" class="form-label">الفندق</label>
+                            <select id="bdHotel" class="form-select">
+                                <option value="">اختر فندق...</option>
+                                <?php foreach ($hotels as $hotel): ?>
+                                    <option value="<?= h($hotel['hotel_name']) ?>"><?= h($hotel['hotel_name']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="bdDateTo" class="form-label">تاريخ الانتهاء (إلى)</label>
+                            <select id="bdDateTo" class="form-select" disabled>
+                                <option value="">اختر الفندق أولاً</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="bdPreview" class="mt-3 d-none">
+                        <hr>
+                        <div id="bdPreviewBody"></div>
+                    </div>
+                    <div class="form-check mt-3">
+                        <input class="form-check-input" type="checkbox" id="bdWipeRelated">
+                        <label class="form-check-label" for="bdWipeRelated">
+                            حذف الحجوزات وإسكان الحجاج المرتبطة أيضاً (لتفادي البيانات المعلَّقة)
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+                    <button type="button" class="btn btn-outline-primary" id="bdCheckBtn" disabled>تحقق من التأثير</button>
+                    <button type="button" class="btn btn-danger" id="bdConfirmBtn" disabled>تأكيد الحذف</button>
                 </div>
             </div>
         </div>
@@ -1239,6 +1540,184 @@ try {
                 $btn.addClass('active btn-primary').removeClass('btn-outline-primary');
                 selectedHotelFilter = String($btn.data('hotel') || '');
                 table.ajax.reload();
+            });
+
+            // =========================
+            // Bulk delete rooms by (hotel, date_to)
+            // =========================
+            const bdEsc = (s) => (s ?? '').toString()
+                .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+            function bdReset(opts) {
+                opts = opts || {};
+                $('#bdPreview').addClass('d-none');
+                $('#bdPreviewBody').empty();
+                $('#bdConfirmBtn').prop('disabled', true);
+                if (opts.resetDates) {
+                    $('#bdDateTo')
+                        .empty()
+                        .append('<option value="">اختر الفندق أولاً</option>')
+                        .prop('disabled', true);
+                }
+                $('#bdCheckBtn').prop('disabled', !($('#bdHotel').val() && $('#bdDateTo').val()));
+            }
+
+            $('#bulkDeleteRoomsModal').on('show.bs.modal', function() {
+                $('#bdHotel').val('');
+                $('#bdWipeRelated').prop('checked', false);
+                bdReset({ resetDates: true });
+            });
+
+            $('#bdHotel').on('change', function() {
+                const hotel = $(this).val();
+                bdReset({ resetDates: true });
+                if (!hotel) return;
+                $.ajax({
+                    url: 'room.php',
+                    method: 'POST',
+                    dataType: 'json',
+                    data: { action: 'bulk_delete_dates', hotel: hotel },
+                    success: function(res) {
+                        if (res.status !== 'ok') {
+                            Swal.fire({ icon: 'error', title: 'خطأ', text: res.message || 'فشل جلب التواريخ.' });
+                            return;
+                        }
+                        const $sel = $('#bdDateTo').empty();
+                        if (!res.dates || res.dates.length === 0) {
+                            $sel.append('<option value="">لا توجد تواريخ متاحة لهذا الفندق</option>')
+                                .prop('disabled', true);
+                            return;
+                        }
+                        $sel.append('<option value="">اختر تاريخ الانتهاء...</option>');
+                        res.dates.forEach(function(d) {
+                            $sel.append(
+                                '<option value="' + bdEsc(d.date_to) + '">'
+                                + bdEsc(d.date_to) + ' (' + d.cnt + ' غرفة)'
+                                + '</option>'
+                            );
+                        });
+                        $sel.prop('disabled', false);
+                    },
+                    error: function() {
+                        Swal.fire({ icon: 'error', title: 'خطأ', text: 'تعذّر الاتصال بالخادم.' });
+                    }
+                });
+            });
+
+            $('#bdDateTo').on('change', function() {
+                bdReset({ resetDates: false });
+            });
+
+            $('#bdCheckBtn').on('click', function() {
+                const hotel   = $('#bdHotel').val();
+                const date_to = $('#bdDateTo').val();
+                if (!hotel || !date_to) return;
+                const $btn = $(this).prop('disabled', true).text('...جاري التحقق');
+                $.ajax({
+                    url: 'room.php',
+                    method: 'POST',
+                    dataType: 'json',
+                    data: { action: 'bulk_delete_preview', hotel: hotel, date_to: date_to },
+                    success: function(res) {
+                        $btn.prop('disabled', false).text('تحقق من التأثير');
+                        if (res.status !== 'ok') {
+                            Swal.fire({ icon: 'error', title: 'خطأ', text: res.message || 'فشل التحقق.' });
+                            return;
+                        }
+                        let html = ''
+                            + '<div class="d-flex flex-wrap gap-2 mb-2">'
+                            + '<span class="badge bg-danger">عدد الغرف للحذف: ' + res.rooms_count + '</span>'
+                            + '<span class="badge bg-warning text-dark">حجوزات مرتبطة: ' + res.res_count + '</span>'
+                            + '<span class="badge bg-info text-dark">إسكان حجاج مرتبط: ' + res.hp_count + '</span>'
+                            + '</div>';
+
+                        if (res.rooms_count === 0) {
+                            html += '<div class="alert alert-light border">لا توجد غرف مطابقة.</div>';
+                        } else {
+                            if ((res.res_count + res.hp_count) > 0) {
+                                html += '<div class="alert alert-warning small">'
+                                     + 'تنبيه: سيتم حذف الغرف فقط، أما الحجوزات وإسكان الحجاج المرتبطة فستبقى في قاعدة البيانات مع غياب الغرفة المرجعية.'
+                                     + '</div>';
+                            }
+                            html += '<div class="small mb-1"><strong>الغرف المتأثرة:</strong></div>'
+                                 + '<div style="max-height:200px;overflow:auto;border:1px solid #dee2e6;border-radius:6px;">'
+                                 + '<table class="table table-sm table-striped mb-0" style="font-size:13px;">'
+                                 + '<thead><tr><th>الطابق</th><th>رقم الغرفة</th><th>النوع</th><th>من</th><th>إلى</th></tr></thead><tbody>';
+                            (res.rooms || []).forEach(function(r) {
+                                html += '<tr>'
+                                      + '<td>' + bdEsc(r.floor) + '</td>'
+                                      + '<td>' + bdEsc(r.room_num) + '</td>'
+                                      + '<td>' + bdEsc(r.room_type) + '</td>'
+                                      + '<td>' + bdEsc(r.date_from) + '</td>'
+                                      + '<td>' + bdEsc(r.date_to) + '</td>'
+                                      + '</tr>';
+                            });
+                            html += '</tbody></table></div>';
+                        }
+                        $('#bdPreviewBody').html(html);
+                        $('#bdPreview').removeClass('d-none');
+                        $('#bdConfirmBtn').prop('disabled', res.rooms_count === 0);
+                    },
+                    error: function() {
+                        $btn.prop('disabled', false).text('تحقق من التأثير');
+                        Swal.fire({ icon: 'error', title: 'خطأ', text: 'تعذّر الاتصال بالخادم.' });
+                    }
+                });
+            });
+
+            $('#bdConfirmBtn').on('click', function() {
+                const hotel   = $('#bdHotel').val();
+                const date_to = $('#bdDateTo').val();
+                if (!hotel || !date_to) return;
+                const wipeRelated = $('#bdWipeRelated').is(':checked');
+                const $btn = $(this);
+                const cascadeNote = wipeRelated
+                    ? '<br><span class="text-danger"><b>تنبيه:</b> سيتم أيضاً حذف الحجوزات وإسكان الحجاج المرتبطة بهذه الغرف.</span>'
+                    : '';
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'تأكيد الحذف',
+                    html: 'سيتم حذف جميع الغرف في فندق <b>' + bdEsc(hotel)
+                        + '</b> التي تنتهي بتاريخ <b>' + bdEsc(date_to) + '</b>.' + cascadeNote
+                        + '<br>هل أنت متأكد؟',
+                    showCancelButton: true,
+                    confirmButtonText: 'نعم، احذف',
+                    cancelButtonText: 'إلغاء',
+                    confirmButtonColor: '#dc3545'
+                }).then(function(result) {
+                    if (!result.isConfirmed) return;
+                    $btn.prop('disabled', true).text('...جاري الحذف');
+                    $.ajax({
+                        url: 'room.php',
+                        method: 'POST',
+                        dataType: 'json',
+                        data: {
+                            action: 'bulk_delete',
+                            hotel: hotel,
+                            date_to: date_to,
+                            wipe_related: wipeRelated ? 1 : 0
+                        },
+                        success: function(res) {
+                            $btn.prop('disabled', false).text('تأكيد الحذف');
+                            if (res.status !== 'success') {
+                                Swal.fire({ icon: 'error', title: 'خطأ', text: res.message || 'فشل الحذف.' });
+                                return;
+                            }
+                            $('#bulkDeleteRoomsModal').modal('hide');
+                            table.ajax.reload(null, false);
+                            let summary = 'تم حذف ' + (res.deleted || 0) + ' غرفة.';
+                            if (res.wipe_related) {
+                                summary += '\nالحجوزات المحذوفة: ' + (res.res_deleted || 0)
+                                        + '\nإسكان الحجاج المحذوف: ' + (res.hp_deleted || 0);
+                            }
+                            Swal.fire({ icon: 'success', title: 'تم الحذف', text: summary });
+                        },
+                        error: function() {
+                            $btn.prop('disabled', false).text('تأكيد الحذف');
+                            Swal.fire({ icon: 'error', title: 'خطأ', text: 'تعذّر الاتصال بالخادم.' });
+                        }
+                    });
+                });
             });
 
             // Utility (shared with bulk)
@@ -1555,22 +2034,101 @@ try {
 
             $("#roomsTable").on("click", '.delete-btn', function() {
                 const id = $(this).data('id');
-                $('#confirmDeleteRoomBtn').off('click').on('click', function() {
-                    $.ajax({
-                        url: 'room.php',
-                        method: 'POST',
-                        dataType: 'json',
-                        data: { action: 'delete', id: id },
-                        success: function(res) {
-                            if (res.status === 'success') {
-                                $('#deleteRoomModal').modal('hide');
-                                table.ajax.reload(null, false);
-                            } else {
-                                alert(res.message || 'Failed.');
-                            }
-                        },
-                        error: function() { alert('Failed to delete room.'); }
-                    });
+                $.ajax({
+                    url: 'room.php',
+                    method: 'POST',
+                    dataType: 'json',
+                    data: { action: 'delete_preview', id: id },
+                    success: function(pv) {
+                        if (pv.status !== 'ok') {
+                            Swal.fire({ icon: 'error', title: 'خطأ', text: pv.message || 'تعذّر فحص التأثير.' });
+                            return;
+                        }
+                        const esc = (s) => (s ?? '').toString()
+                            .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                        const r = pv.room || {};
+                        const hasLinked = (pv.res_count + pv.hp_count) > 0;
+
+                        let html = ''
+                            + '<div style="text-align:right;direction:rtl;font-size:14px;">'
+                            + '<p><b>الغرفة:</b> ' + esc(r.hotel_name) + ' • طابق ' + esc(r.floor) + ' • غرفة ' + esc(r.room_num) + '</p>'
+                            + '<div class="d-flex flex-wrap gap-2 mb-2">'
+                            + '<span class="badge bg-warning text-dark">حجوزات مرتبطة: ' + pv.res_count + '</span>'
+                            + '<span class="badge bg-info text-dark">إسكان حجاج مرتبط: ' + pv.hp_count + '</span>'
+                            + '</div>';
+
+                        if (pv.res_count > 0) {
+                            html += '<div class="small mb-1"><b>الحجوزات:</b></div>'
+                                 + '<div style="max-height:140px;overflow:auto;border:1px solid #dee2e6;border-radius:6px;">'
+                                 + '<table class="table table-sm table-striped mb-0" style="font-size:13px;">'
+                                 + '<thead><tr><th>التكتل</th><th>من</th><th>إلى</th></tr></thead><tbody>';
+                            (pv.reservations || []).forEach(function(x) {
+                                html += '<tr><td>' + esc(x.master_group) + '</td><td>' + esc(x.start_date) + '</td><td>' + esc(x.end_date) + '</td></tr>';
+                            });
+                            html += '</tbody></table></div>';
+                        }
+                        if (pv.hp_count > 0) {
+                            html += '<div class="small mb-1 mt-2"><b>الحجاج المُسكَّنون:</b></div>'
+                                 + '<div style="max-height:140px;overflow:auto;border:1px solid #dee2e6;border-radius:6px;">'
+                                 + '<table class="table table-sm table-striped mb-0" style="font-size:13px;">'
+                                 + '<thead><tr><th>الاسم</th><th>الباركود</th></tr></thead><tbody>';
+                            (pv.pilgrims || []).forEach(function(x) {
+                                html += '<tr><td>' + esc(x.name || '—') + '</td><td>' + esc(x.barcode) + '</td></tr>';
+                            });
+                            html += '</tbody></table></div>';
+                        }
+
+                        if (hasLinked) {
+                            html += '<div class="form-check mt-3 text-end">'
+                                 + '<input class="form-check-input" type="checkbox" id="singleDeleteWipe">'
+                                 + '<label class="form-check-label" for="singleDeleteWipe">'
+                                 + ' حذف الحجوزات وإسكان الحجاج المرتبطة أيضاً'
+                                 + '</label></div>';
+                        } else {
+                            html += '<div class="alert alert-light border small mt-2">لا توجد بيانات مرتبطة.</div>';
+                        }
+                        html += '</div>';
+
+                        Swal.fire({
+                            title: 'تأكيد حذف الغرفة',
+                            html: html,
+                            icon: 'warning',
+                            showCancelButton: true,
+                            confirmButtonText: 'نعم، احذف',
+                            cancelButtonText: 'إلغاء',
+                            confirmButtonColor: '#dc3545',
+                            width: '720px',
+                            focusCancel: true
+                        }).then(function(result) {
+                            if (!result.isConfirmed) return;
+                            const wipe = hasLinked && $('#singleDeleteWipe').is(':checked');
+                            $.ajax({
+                                url: 'room.php',
+                                method: 'POST',
+                                dataType: 'json',
+                                data: { action: 'delete', id: id, wipe_related: wipe ? 1 : 0 },
+                                success: function(resp) {
+                                    if (resp.status === 'success') {
+                                        table.ajax.reload(null, false);
+                                        let txt = 'تم حذف الغرفة.';
+                                        if (resp.wipe_related) {
+                                            txt += '\nالحجوزات المحذوفة: ' + (resp.res_deleted || 0)
+                                                + '\nإسكان الحجاج المحذوف: ' + (resp.hp_deleted || 0);
+                                        }
+                                        Swal.fire({ icon: 'success', title: 'تم الحذف', text: txt });
+                                    } else {
+                                        Swal.fire({ icon: 'error', title: 'خطأ', text: resp.message || 'فشل الحذف.' });
+                                    }
+                                },
+                                error: function() {
+                                    Swal.fire({ icon: 'error', title: 'خطأ', text: 'تعذّر الاتصال بالخادم.' });
+                                }
+                            });
+                        });
+                    },
+                    error: function() {
+                        Swal.fire({ icon: 'error', title: 'خطأ', text: 'تعذّر الاتصال بالخادم.' });
+                    }
                 });
             });
 
