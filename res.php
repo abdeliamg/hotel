@@ -19,25 +19,8 @@ function json_response(array $data, int $statusCode = 200): void {
 }
 
 function normalize_date(?string $s): string {
-    $s = trim((string)$s);
-    if ($s === '') return '';
-    // Accept day-first and ISO formats, with or without leading zeros
-    // (e.g. 23/5/2026, 03/05/2026, 2026-05-23). Day-first is tried before
-    // month-first so ambiguous values like 5/6/2026 are read as 5 June.
-    $formats = ['Y-m-d', 'Y/m/d', 'd/m/Y', 'j/n/Y', 'd-m-Y', 'j-n-Y', 'm/d/Y', 'n/j/Y', 'm-d-Y'];
-    foreach ($formats as $fmt) {
-        $dt = DateTime::createFromFormat('!' . $fmt, $s);
-        $errors = DateTime::getLastErrors();
-        $warningCount = is_array($errors) ? (int)$errors['warning_count'] : 0;
-        $errorCount   = is_array($errors) ? (int)$errors['error_count'] : 0;
-        if ($dt && $warningCount === 0 && $errorCount === 0) {
-            return $dt->format('Y-m-d');
-        }
-    }
-    // Try to parse loosely (handles textual dates / other separators)
-    $ts = strtotime($s);
-    if ($ts !== false) return date('Y-m-d', $ts);
-    return '';
+    $normalized = normalize_import_date($s);
+    return $normalized ?? '';
 }
 
 function date_less_equal(string $a, string $b): bool {

@@ -24,28 +24,10 @@ function h($v) { return htmlspecialchars($v ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 
 
 /**
  * Normalize common date formats to Y-m-d; allow null/empty.
- * Accepts Y-m-d, d-m-Y, d/m/Y, m-d-Y, m/d/Y, d-m-y, d/m/y
+ * Delegates to normalize_import_date() for Excel paste formats.
  */
 function normalizeDate($value) {
-    $value = trim((string)$value);
-    if ($value === '' || strtolower($value) === 'null' || strtolower($value) === 'nil') {
-        return null;
-    }
-    $value = str_replace('/', '-', $value);
-    $formats = ['Y-m-d', 'd-m-Y', 'm-d-Y', 'd-m-y', 'm-d-y'];
-    foreach ($formats as $fmt) {
-        $dt = DateTime::createFromFormat($fmt, $value);
-        if ($dt && $dt->format($fmt) === $value) {
-            return $dt->format('Y-m-d');
-        }
-    }
-    // Last chance parsing
-    try {
-        $dt = new DateTime($value);
-        return $dt->format('Y-m-d');
-    } catch (Exception $e) {
-        return $value;
-    }
+    return normalize_import_date($value);
 }
 
 /** Max date with NULL treated as "infinite" (so max(null, x) = null / open-ended) */

@@ -74,4 +74,45 @@ function parse_pasted_tsv(string $rawText, array $columnAliases, array $fixedOrd
 
     return ['ok' => true, 'rows' => $rows, 'has_header' => $hasHeader];
 }
+
+/**
+ * Normalize pasted/imported dates to Y-m-d.
+ * Accepts common Excel formats:
+ *   yyyy-mm-dd, yyyy/mm/dd, dd/mm/yyyy, dd-mm-yyyy, d/m/yyyy
+ * Returns null for empty/invalid input.
+ */
+function normalize_import_date(?string $value): ?string
+{
+    $value = trim((string)$value);
+    if ($value === '' || strcasecmp($value, 'null') === 0 || strcasecmp($value, 'nil') === 0) {
+        return null;
+    }
+
+    // ISO and day-first formats first so values like 5/6/2026 are read as 5 June.
+    $formats = [
+        'Y-m-d', // yyyy-mm-dd
+        'Y/m/d', // yyyy/mm/dd
+        'd/m/Y', // dd/mm/yyyy
+        'j/n/Y', // d/m/yyyy
+        'd-m-Y', // dd-mm-yyyy
+        'j-n-Y', // d-m-yyyy
+    ];
+
+    foreach ($formats as $fmt) {
+        $dt = DateTime::createFromFormat('!' . $fmt, $value);
+        $errors = DateTime::getLastErrors();
+        $warningCount = is_array($errors) ? (int)$errors['warning_count'] : 0;
+        $errorCount   = is_array($errors) ? (int)$errors['error_count'] : 0;
+        if ($dt && $warningCount === 0 && $errorCount === 0) {
+            return $dt->format('Y-m-d');
+        }
+    }
+
+    $ts = strtotime($value);
+    if ($ts !== false) {
+        return date('Y-m-d', $ts);
+    }
+
+    return null;
+}
 ?>
