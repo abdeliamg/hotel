@@ -20,6 +20,11 @@ $term = isset($_GET['q']) ? (string)$_GET['q'] : '';
 $normalized = preg_replace('/\s+/u', '%', trim($term));
 $searchTerm = '%' . $normalized . '%';
 
+// Pagination (Select2 sends `page` starting at 1; serve 10 rows per page).
+$pageSize = 10;
+$page     = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+$offset   = ($page - 1) * $pageSize;
+
 // Build the scoping clause: admins see all; non-admins are limited to pilgrims
 // whose `group` belongs to the logged-in master_group (one master_group → many groups).
 $scopeSql = '';
@@ -45,11 +50,16 @@ $sql = '
           WHERE hp.barcode = pilgrim.barcode
       )
     ORDER BY name COLLATE NOCASE ASC
-    LIMIT 10
+    LIMIT :limit OFFSET :offset
 ';
 
 $stmt = $pdo->prepare($sql);
-$stmt->execute($params);
+foreach ($params as $k => $v) {
+    $stmt->bindValue($k, $v, PDO::PARAM_STR);
+}
+$stmt->bindValue(':limit',  $pageSize, PDO::PARAM_INT);
+$stmt->bindValue(':offset', $offset,   PDO::PARAM_INT);
+$stmt->execute();
 
 $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
 header('Content-Type: application/json; charset=UTF-8');
