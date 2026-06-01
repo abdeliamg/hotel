@@ -1121,7 +1121,7 @@ try {
                     <textarea id="bulkTextarea" class="form-control" rows="8" placeholder="الصق من Excel هنا (أعمدة مفصولة بعلامة تبويب)"></textarea>
 
                     <div class="form-check mt-3">
-                        <input class="form-check-input" type="checkbox" id="autoUpdateChk">
+                        <input class="form-check-input" type="checkbox" id="autoUpdateChk" checked>
                         <label class="form-check-label" for="autoUpdateChk">
                             التحديث التلقائي عند التطابق (زيادة تاريخ &laquo;إلى&raquo; تلقائيًا)
                         </label>
